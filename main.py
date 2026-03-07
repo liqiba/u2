@@ -18,7 +18,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.1'
+APP_VERSION = '2026.3.2'
 
 DEFAULT_CONFIG = {
     'enabled': False,
