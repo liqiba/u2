@@ -18,7 +18,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.2'
+APP_VERSION = '2026.3.3'
 
 DEFAULT_CONFIG = {
     'enabled': False,
@@ -356,10 +356,13 @@ def index():
     button:hover{background:var(--pri2)} button.ghost{background:transparent;border:1px solid var(--line);color:var(--text)} button.danger{background:#b4232a}
     pre{margin:0;background:#0a0f1f;color:#c7d2ff;border:1px solid var(--line);border-radius:10px;padding:12px;max-height:360px;overflow:auto;line-height:1.45}
     .tip{font-size:12px;color:var(--sub)} .qb-item{border:1px dashed var(--line);border-radius:12px;padding:10px;margin-top:10px}
-    .qb-row{display:grid;grid-template-columns:1.1fr 1.2fr .8fr 1fr 1fr auto;gap:8px;align-items:center;margin-top:8px}
-    .qb-head{font-size:12px;color:var(--sub);padding:0 4px}
     .modules{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-    @media (max-width:960px){.qb-row{grid-template-columns:1fr 1fr}.qb-row .fullm{grid-column:1/-1}}
+    .module-card{cursor:pointer;transition:.15s;border:1px solid var(--line);border-radius:12px;padding:10px;background:#101833}
+    .module-card:hover{border-color:#4f7cff}
+    .module-card.active{border-color:#6ea1ff;box-shadow:0 0 0 1px #6ea1ff33 inset}
+    .module-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+    .editor-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    @media (max-width:960px){.editor-grid{grid-template-columns:1fr}}
     @media (max-width:760px){.form,.status,.modules{grid-template-columns:1fr}}
   </style>
 </head>
@@ -370,6 +373,7 @@ def index():
   </div>
 <script>
 let qbClients=[];
+let selectedQbIndex=0;
 let qbStatsTimer=null;
 async function j(u,o){const r=await fetch(u,o);return await r.json()}
 function esc(t){return (t??'').toString().replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
@@ -381,27 +385,102 @@ function fmtBytes(n){
 }
 function fmtSpeed(n){ return `${fmtBytes(n)}/s`; }
 function statusBadge(s){ if(s.running) return `<span class='dot warn'></span>执行中`; if(s.last_error) return `<span class='dot err'></span>异常`; return `<span class='dot ok'></span>正常`; }
+
+function applyEditorToState(){
+  const i=selectedQbIndex;
+  if(i<0 || i>=qbClients.length) return;
+  const q=qbClients[i];
+  const g=(id)=>document.getElementById(id);
+  if(!g('edit_qb_name')) return;
+  q.name=g('edit_qb_name').value.trim();
+  q.enabled=g('edit_qb_enabled').checked;
+  q.qb_url=g('edit_qb_url').value.trim();
+  q.qb_username=g('edit_qb_username').value.trim();
+  q.qb_password=g('edit_qb_password').value.trim();
+  q.qb_category=g('edit_qb_category').value.trim();
+  q.qb_savepath=g('edit_qb_savepath').value.trim();
+  q.qb_paused=g('edit_qb_paused').checked;
+}
+
+function renderQbEditor(){
+  const box=document.getElementById('qbEditor');
+  if(!box) return;
+  if(!qbClients.length){
+    box.innerHTML=`<div class='tip'>还没有 qB 模块，点击上方「+ 添加QB配置」新增。</div>`;
+    return;
+  }
+  if(selectedQbIndex>=qbClients.length) selectedQbIndex=qbClients.length-1;
+  const q=qbClients[selectedQbIndex]||{};
+  box.innerHTML=`
+    <div class='k' style='margin-bottom:8px'>编辑模块：${esc(q.name||('qb-'+(selectedQbIndex+1)))}</div>
+    <div class='editor-grid'>
+      <div><label>名称</label><input id='edit_qb_name' value='${esc(q.name||'')}'></div>
+      <div class='switch'><input id='edit_qb_enabled' type='checkbox' ${q.enabled!==false?'checked':''}><label for='edit_qb_enabled' style='margin:0;color:var(--text)'>启用</label></div>
+      <div><label>URL</label><input id='edit_qb_url' value='${esc(q.qb_url||'')}' placeholder='http://127.0.0.1:8080'></div>
+      <div><label>用户名</label><input id='edit_qb_username' value='${esc(q.qb_username||'')}'></div>
+      <div><label>密码</label><input id='edit_qb_password' type='password' value='${esc(q.qb_password||'')}'></div>
+      <div><label>分类</label><input id='edit_qb_category' value='${esc(q.qb_category||'')}'></div>
+      <div class='full'><label>保存路径</label><input id='edit_qb_savepath' value='${esc(q.qb_savepath||'')}' placeholder='/downloads/u2'></div>
+      <div class='switch full'><input id='edit_qb_paused' type='checkbox' ${q.qb_paused?'checked':''}><label for='edit_qb_paused' style='margin:0;color:var(--text)'>推送后暂停</label></div>
+    </div>
+    <div class='actions' style='margin-top:10px'>
+      <button class='ghost' onclick='openQb()'>打开 qB</button>
+      <button class='danger' onclick='removeQb(selectedQbIndex)'>删除当前模块</button>
+    </div>
+  `;
+}
+
 function renderQbModules(items=[]){
   const el=document.getElementById('qbModules'); if(!el) return;
-  if(!items.length){ el.innerHTML = `<div class='tip'>暂无 qB 模块</div>`; return; }
-  el.innerHTML = items.map(it=>`
-    <div class='qb-item'>
-      <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px'>
-        <div style='font-weight:700'>${esc(it.name||'qB')}</div>
-        <div class='badge'>${it.ok?"<span class='dot ok'></span>在线":"<span class='dot err'></span>离线"}</div>
+  if(!qbClients.length){ el.innerHTML = `<div class='tip'>暂无 qB 模块</div>`; return; }
+  el.innerHTML = qbClients.map((q,i)=>{
+    const it = items[i] || {};
+    const ok = !!it.ok;
+    return `
+      <div class='module-card ${i===selectedQbIndex?'active':''}' onclick='selectQb(${i})'>
+        <div class='module-head'>
+          <div style='font-weight:700'>${esc(q.name||('qb-'+(i+1)))}</div>
+          <div class='badge'>${ok?"<span class='dot ok'></span>在线":"<span class='dot err'></span>离线"}</div>
+        </div>
+        <div class='status'>
+          <div><div class='k'>任务数</div><div class='v'>${ok?(it.task_count??'-'):'-'}</div></div>
+          <div><div class='k'>实时下载</div><div class='v'>${ok?fmtSpeed(it.dl_speed):'-'}</div></div>
+          <div><div class='k'>实时上传</div><div class='v'>${ok?fmtSpeed(it.up_speed):'-'}</div></div>
+          <div><div class='k'>总下载</div><div class='v'>${ok?fmtBytes(it.dl_total):'-'}</div></div>
+          <div><div class='k'>总上传</div><div class='v'>${ok?fmtBytes(it.up_total):'-'}</div></div>
+          <div><div class='k'>节点</div><div class='v'>${esc(q.qb_url||'-')}</div></div>
+        </div>
+        ${ok?'':`<div class='tip' style='margin-top:8px;color:#ff9aa2'>${esc(it.error||'连接失败')}</div>`}
       </div>
-      <div class='status'>
-        <div><div class='k'>任务数</div><div class='v'>${it.ok?it.task_count:'-'}</div></div>
-        <div><div class='k'>实时下载</div><div class='v'>${it.ok?fmtSpeed(it.dl_speed):'-'}</div></div>
-        <div><div class='k'>实时上传</div><div class='v'>${it.ok?fmtSpeed(it.up_speed):'-'}</div></div>
-        <div><div class='k'>总下载</div><div class='v'>${it.ok?fmtBytes(it.dl_total):'-'}</div></div>
-        <div><div class='k'>总上传</div><div class='v'>${it.ok?fmtBytes(it.up_total):'-'}</div></div>
-        <div><div class='k'>节点</div><div class='v'>${esc(it.qb_url||'-')}</div></div>
-      </div>
-      ${it.ok?'':`<div class='tip' style='margin-top:8px;color:#ff9aa2'>${esc(it.error||'连接失败')}</div>`}
-    </div>
-  `).join('');
+    `;
+  }).join('');
 }
+
+function addQb(){
+  applyEditorToState();
+  qbClients.push({name:`qb-${qbClients.length+1}`,enabled:true,qb_url:'http://127.0.0.1:8080',qb_username:'',qb_password:'',qb_category:'',qb_savepath:'',qb_paused:false});
+  selectedQbIndex = qbClients.length-1;
+  renderQbEditor();
+  renderQbModules([]);
+}
+function selectQb(i){
+  applyEditorToState();
+  selectedQbIndex=i;
+  renderQbEditor();
+  refreshQbStats();
+}
+function removeQb(i){
+  qbClients.splice(i,1);
+  if(selectedQbIndex>=qbClients.length) selectedQbIndex=Math.max(0,qbClients.length-1);
+  renderQbEditor();
+  refreshQbStats();
+}
+function openQb(){
+  applyEditorToState();
+  const q=qbClients[selectedQbIndex]||{};
+  if(q.qb_url) window.open(q.qb_url,'_blank');
+}
+
 async function refreshQbStats(){
   try{
     const res=await j('/api/qb/stats');
@@ -410,49 +489,9 @@ async function refreshQbStats(){
     renderQbModules([]);
   }
 }
-function renderQbList(){
-  const box=document.getElementById('qbList'); if(!box) return;
-  if(!qbClients.length){ box.innerHTML = `<div class='tip'>还没有 qB，点上方“添加 qB 模块”</div>`; return; }
-  box.innerHTML = `
-    <div class='qb-row qb-head'>
-      <div>名称</div><div>URL</div><div>用户名</div><div>分类</div><div>保存路径</div><div>操作</div>
-    </div>
-  ` + qbClients.map((q,i)=>`
-    <div class='qb-row qb-item'>
-      <div>
-        <input id='qb_name_${i}' value='${esc(q.name||`qb-${i+1}`)}'>
-        <div class='switch' style='margin-top:6px'><input id='qb_enabled_${i}' type='checkbox' ${q.enabled!==false?'checked':''}><label for='qb_enabled_${i}' style='margin:0;color:var(--text)'>启用</label></div>
-      </div>
-      <div>
-        <input id='qb_url_${i}' value='${esc(q.qb_url||'')}' placeholder='http://127.0.0.1:8080'>
-        <input id='qb_password_${i}' type='password' value='${esc(q.qb_password||'')}' placeholder='密码' style='margin-top:6px'>
-      </div>
-      <div><input id='qb_username_${i}' value='${esc(q.qb_username||'')}'></div>
-      <div><input id='qb_category_${i}' value='${esc(q.qb_category||'')}'></div>
-      <div>
-        <input id='qb_savepath_${i}' value='${esc(q.qb_savepath||'')}' placeholder='/downloads/u2'>
-        <div class='switch' style='margin-top:6px'><input id='qb_paused_${i}' type='checkbox' ${q.qb_paused?'checked':''}><label for='qb_paused_${i}' style='margin:0;color:var(--text)'>推送后暂停</label></div>
-      </div>
-      <div class='fullm'><button class='danger' onclick='removeQb(${i})'>删除</button></div>
-    </div>
-  `).join('');
-}
-function addQb(){ qbClients.push({name:`qb-${qbClients.length+1}`,enabled:true,qb_url:'http://127.0.0.1:8080',qb_username:'',qb_password:'',qb_category:'',qb_savepath:'',qb_paused:false}); renderQbList(); }
-function removeQb(i){ qbClients.splice(i,1); renderQbList(); }
-function collectQb(){
-  return qbClients.map((_,i)=>({
-    name:document.getElementById(`qb_name_${i}`).value.trim(),
-    enabled:document.getElementById(`qb_enabled_${i}`).checked,
-    qb_url:document.getElementById(`qb_url_${i}`).value.trim(),
-    qb_username:document.getElementById(`qb_username_${i}`).value.trim(),
-    qb_password:document.getElementById(`qb_password_${i}`).value.trim(),
-    qb_category:document.getElementById(`qb_category_${i}`).value.trim(),
-    qb_savepath:document.getElementById(`qb_savepath_${i}`).value.trim(),
-    qb_paused:document.getElementById(`qb_paused_${i}`).checked,
-  }));
-}
+
 async function load(){
- const c=await j('/api/config'); const s=await j('/api/status'); qbClients = c.qb_clients || [];
+ const c=await j('/api/config'); const s=await j('/api/status'); qbClients = JSON.parse(JSON.stringify(c.qb_clients || []));
  document.getElementById('runBadge').innerHTML=statusBadge(s);
  document.getElementById('app').innerHTML=`
  <div class='card'><div class='status'>
@@ -461,8 +500,12 @@ async function load(){
    <div><div class='k'>最近错误</div><div class='v'>${esc(s.last_error||'无')}</div></div>
  </div></div>
  <div class='card'>
-   <div class='k' style='margin-bottom:8px'>qB 模块看板（自动刷新）</div>
+   <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px'>
+     <div class='k'>qB 模块看板（自动刷新）</div>
+     <button type='button' onclick='addQb()'>+ 添加QB配置</button>
+   </div>
    <div id='qbModules' class='modules'><div class='tip'>加载中...</div></div>
+   <div id='qbEditor' class='qb-item'></div>
  </div>
  <div class='card'><div class='form'>
    <div class='full switch'><input id='enabled' type='checkbox' ${c.enabled?'checked':''}><label for='enabled' style='margin:0;color:var(--text)'>启用定时任务</label></div>
@@ -473,21 +516,20 @@ async function load(){
    <div class='full'><label>U2 Passkey</label><input id='u2_passkey' type='password' value='${esc(c.u2_passkey||'')}'></div>
    <div><label>魔法范围（scope）</label><select id='scope'><option value='public' ${c.scope==='public'?'selected':''}>公共魔法（public）</option><option value='all' ${c.scope==='all'?'selected':''}>全部魔法（all）</option><option value='private' ${c.scope==='private'?'selected':''}>私人魔法（private）</option><option value='global' ${c.scope==='global'?'selected':''}>全局魔法（global）</option></select></div>
    <div><label>qB 分发模式</label><select id='qb_mode'><option value='round_robin' ${c.qb_mode==='round_robin'?'selected':''}>轮询分发</option><option value='all' ${c.qb_mode==='all'?'selected':''}>全部推送</option></select></div>
-   <div class='full' style='margin-top:6px;padding-top:10px;border-top:1px dashed var(--line);color:var(--sub);font-size:12px'>多 qB 配置</div>
-   <div class='full actions'><button type='button' onclick='addQb()'>+ 添加 qB 模块</button></div>
-   <div class='full' id='qbList'></div>
  </div>
  <div class='actions' style='margin-top:12px'><button onclick='save()'>保存配置</button><button onclick='runNow()'>立即执行一次</button><button class='ghost' onclick='refreshLogs()'>刷新日志</button></div>
- <div class='tip' style='margin-top:10px'>建议使用“轮询分发”，可把任务均匀分配到多个 qB。</div>
+ <div class='tip' style='margin-top:10px'>点击上方 qB 模块可编辑配置；点击“打开 qB”可跳转到对应面板。</div>
  </div>
  <div class='card'><div class='k' style='margin-bottom:8px'>最近日志（最多 200 行）</div><pre id='logs'>loading logs...</pre></div>`;
- renderQbList();
+ selectedQbIndex = Math.min(selectedQbIndex, Math.max(0, qbClients.length-1));
+ renderQbEditor();
  await refreshQbStats();
  if(qbStatsTimer) clearInterval(qbStatsTimer);
  qbStatsTimer = setInterval(refreshQbStats, 5000);
  await refreshLogs();
 }
 async function save(){
+ applyEditorToState();
  const body={
   enabled:document.getElementById('enabled').checked,
   interval:parseInt(document.getElementById('interval').value||'120'),
@@ -499,7 +541,7 @@ async function save(){
   max_seeders:5,
   download_non_free:false,
   qb_mode:document.getElementById('qb_mode').value,
-  qb_clients:collectQb(),
+  qb_clients:qbClients,
  };
  await fetch('/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
  alert('配置已保存'); load();
