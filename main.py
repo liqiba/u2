@@ -18,7 +18,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.6'
+APP_VERSION = '2026.3.7'
 
 DEFAULT_CONFIG = {
     'enabled': False,
@@ -342,8 +342,10 @@ def index():
   <meta name='viewport' content='width=device-width, initial-scale=1'>
   <title>Catch Magic Web</title>
   <style>
-    :root{--bg:#0b1020;--bg2:#131a2e;--card:#151d34;--line:#263150;--text:#e7ecff;--sub:#9eadcf;--ok:#22c55e;--warn:#f59e0b;--err:#ef4444;--pri:#4f7cff;--pri2:#335ed8}
-    *{box-sizing:border-box} body{margin:0;background:radial-gradient(1200px 800px at 20% -10%,#1a2650 0%,var(--bg) 50%);color:var(--text);font-family:Inter,Segoe UI,Arial,sans-serif}
+    :root{--bg:#0b1020;--bg2:#131a2e;--card:#151d34;--line:#263150;--text:#e7ecff;--sub:#9eadcf;--ok:#22c55e;--warn:#f59e0b;--err:#ef4444;--pri:#4f7cff;--pri2:#335ed8;--module1:#162241;--module2:#0f1a35}
+    body.theme-light{--bg:#f4f7ff;--bg2:#ffffff;--card:#ffffff;--line:#dce4ff;--text:#1d2742;--sub:#5b6b91;--ok:#16a34a;--warn:#d97706;--err:#dc2626;--pri:#3b82f6;--pri2:#245fd1;--module1:#eef4ff;--module2:#ffffff}
+    *{box-sizing:border-box} body{margin:0;background:radial-gradient(1200px 800px at 20% -10%,#1a2650 0%,var(--bg) 50%);color:var(--text);font-family:Inter,Segoe UI,Arial,sans-serif;transition:background .2s,color .2s}
+    body.theme-light{background:linear-gradient(180deg,#f8faff 0%,#eef3ff 100%)}
     .wrap{max-width:1100px;margin:24px auto;padding:0 16px;width:100%}.title{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:14px}
     h2{margin:0;font-size:24px;line-height:1.2}.badge{padding:6px 10px;border-radius:999px;border:1px solid var(--line);font-size:12px;color:var(--sub)}
     .grid{display:grid;gap:14px}.card{background:linear-gradient(180deg,var(--card),var(--bg2));border:1px solid var(--line);border-radius:14px;padding:14px;overflow:hidden}
@@ -358,9 +360,9 @@ def index():
     pre{margin:0;background:#0a0f1f;color:#c7d2ff;border:1px solid var(--line);border-radius:10px;padding:12px;max-height:360px;overflow:auto;line-height:1.45}
     .tip{font-size:12px;color:var(--sub)} .qb-item{border:1px dashed var(--line);border-radius:12px;padding:10px;margin-top:10px}
     .modules{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
-    .module-card{cursor:pointer;transition:.15s;border:1px solid var(--line);border-radius:12px;padding:10px;background:#101833}
-    .module-card:hover{border-color:#4f7cff}
-    .module-card.active{border-color:#6ea1ff;box-shadow:0 0 0 1px #6ea1ff33 inset}
+    .module-card{transition:.18s;border:1px solid var(--line);border-radius:14px;padding:12px;background:linear-gradient(180deg,var(--module1),var(--module2));box-shadow:0 6px 18px #00000014}
+    .module-card:hover{border-color:var(--pri);transform:translateY(-1px)}
+    .module-card.active{border-color:var(--pri);box-shadow:0 0 0 1px #6ea1ff33 inset}
     .module-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
     .editor-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
     @media (max-width:980px){
@@ -385,7 +387,7 @@ def index():
 </head>
 <body>
   <div class='wrap'>
-    <div class='title'><h2>Catch Magic Web <span style='font-size:13px;color:var(--sub);font-weight:500'>v__APP_VERSION__</span></h2><div class='badge' id='runBadge'>状态读取中...</div></div>
+    <div class='title'><h2>Catch Magic Web <span style='font-size:13px;color:var(--sub);font-weight:500'>v__APP_VERSION__</span></h2><div class='actions'><button class='ghost' type='button' onclick='toggleTheme()'>🌗 主题切换</button><div class='badge' id='runBadge'>状态读取中...</div></div></div>
     <div id='app' class='grid'>loading...</div>
   </div>
 <script>
@@ -398,6 +400,9 @@ function esc(t){return (t??'').toString().replace(/[&<>"']/g,m=>({'&':'&amp;','<
 function fmtBytes(n){ n=Number(n||0); const u=['B','KB','MB','GB','TB']; let i=0; while(n>=1024&&i<u.length-1){n/=1024;i++;} return `${n.toFixed(i<=1?0:2)} ${u[i]}`; }
 function fmtSpeed(n){ return `${fmtBytes(n)}/s`; }
 function statusBadge(s){ if(s.running) return `<span class='dot warn'></span>执行中`; if(s.last_error) return `<span class='dot err'></span>异常`; return `<span class='dot ok'></span>正常`; }
+function getTheme(){ return localStorage.getItem('cm_theme')||'dark'; }
+function applyTheme(){ const t=getTheme(); document.body.classList.toggle('theme-light', t==='light'); }
+function toggleTheme(){ localStorage.setItem('cm_theme', getTheme()==='light'?'dark':'light'); applyTheme(); }
 
 function openQb(i){
   const q=qbClients[i]||{};
@@ -492,6 +497,7 @@ async function refreshQbStats(){
 }
 
 async function load(){
+ applyTheme();
  const c=await j('/api/config'); const s=await j('/api/status'); qbClients = JSON.parse(JSON.stringify(c.qb_clients || []));
  document.getElementById('runBadge').innerHTML=statusBadge(s);
  document.getElementById('app').innerHTML=`
