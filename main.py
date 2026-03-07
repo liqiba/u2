@@ -18,7 +18,8 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.8'
+APP_VERSION = '2026.3.9'
+QB_TORRENT_UP_LIMIT_BYTES = 50 * 1024 * 1024  # 50 MB/s per torrent
 
 DEFAULT_CONFIG = {
     'enabled': False,
@@ -117,6 +118,7 @@ def qb_add_torrent(client: dict, torrent_url: str):
         'urls': torrent_url,
         'autoTMM': 'false',
         'paused': 'true' if client.get('qb_paused') else 'false',
+        'upLimit': str(QB_TORRENT_UP_LIMIT_BYTES),
     }
     if client.get('qb_category'):
         data['category'] = str(client.get('qb_category'))
@@ -269,7 +271,7 @@ class Runner:
                     cname = cli.get('name') or cli.get('qb_url') or 'unknown'
                     ok, msg = qb_add_torrent(cli, torrent_url)
                     if ok:
-                        log(f'pushed to qB[{cname}]: promotion={pid}, tid={tid}')
+                        log(f'pushed to qB[{cname}]: promotion={pid}, tid={tid}, upLimit={QB_TORRENT_UP_LIMIT_BYTES}B/s')
                     else:
                         log(f'push to qB[{cname}] failed: promotion={pid}, tid={tid}, err={msg}')
 
