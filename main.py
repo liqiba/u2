@@ -18,7 +18,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.5'
+APP_VERSION = '2026.3.6'
 
 DEFAULT_CONFIG = {
     'enabled': False,
@@ -390,61 +390,55 @@ def index():
   </div>
 <script>
 let qbClients=[];
-let selectedQbIndex=0;
 let qbStatsTimer=null;
+let editingQbIndex=null;
+
 async function j(u,o){const r=await fetch(u,o);return await r.json()}
 function esc(t){return (t??'').toString().replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
-function fmtBytes(n){
-  n=Number(n||0);
-  const u=['B','KB','MB','GB','TB'];
-  let i=0; while(n>=1024&&i<u.length-1){n/=1024;i++;}
-  return `${n.toFixed(i<=1?0:2)} ${u[i]}`;
-}
+function fmtBytes(n){ n=Number(n||0); const u=['B','KB','MB','GB','TB']; let i=0; while(n>=1024&&i<u.length-1){n/=1024;i++;} return `${n.toFixed(i<=1?0:2)} ${u[i]}`; }
 function fmtSpeed(n){ return `${fmtBytes(n)}/s`; }
 function statusBadge(s){ if(s.running) return `<span class='dot warn'></span>执行中`; if(s.last_error) return `<span class='dot err'></span>异常`; return `<span class='dot ok'></span>正常`; }
 
-function applyEditorToState(){
-  const i=selectedQbIndex;
-  if(i<0 || i>=qbClients.length) return;
-  const q=qbClients[i];
-  const g=(id)=>document.getElementById(id);
-  if(!g('edit_qb_name')) return;
-  q.name=g('edit_qb_name').value.trim();
-  q.enabled=g('edit_qb_enabled').checked;
-  q.qb_url=g('edit_qb_url').value.trim();
-  q.qb_username=g('edit_qb_username').value.trim();
-  q.qb_password=g('edit_qb_password').value.trim();
-  q.qb_category=g('edit_qb_category').value.trim();
-  q.qb_savepath=g('edit_qb_savepath').value.trim();
-  q.qb_paused=g('edit_qb_paused').checked;
+function openQb(i){
+  const q=qbClients[i]||{};
+  if(q.qb_url) window.open(q.qb_url,'_blank');
 }
 
-function renderQbEditor(){
-  const box=document.getElementById('qbEditor');
-  if(!box) return;
-  if(!qbClients.length){
-    box.innerHTML=`<div class='tip'>还没有 qB 模块，点击上方「+ 添加QB配置」新增。</div>`;
-    return;
-  }
-  if(selectedQbIndex>=qbClients.length) selectedQbIndex=qbClients.length-1;
-  const q=qbClients[selectedQbIndex]||{};
-  box.innerHTML=`
-    <div class='k' style='margin-bottom:8px'>编辑模块：${esc(q.name||('qb-'+(selectedQbIndex+1)))}</div>
-    <div class='editor-grid'>
-      <div><label>名称</label><input id='edit_qb_name' value='${esc(q.name||'')}'></div>
-      <div class='switch'><input id='edit_qb_enabled' type='checkbox' ${q.enabled!==false?'checked':''}><label for='edit_qb_enabled' style='margin:0;color:var(--text)'>启用</label></div>
-      <div><label>URL</label><input id='edit_qb_url' value='${esc(q.qb_url||'')}' placeholder='http://127.0.0.1:8080'></div>
-      <div><label>用户名</label><input id='edit_qb_username' value='${esc(q.qb_username||'')}'></div>
-      <div><label>密码</label><input id='edit_qb_password' type='password' value='${esc(q.qb_password||'')}'></div>
-      <div><label>分类</label><input id='edit_qb_category' value='${esc(q.qb_category||'')}'></div>
-      <div class='full'><label>保存路径</label><input id='edit_qb_savepath' value='${esc(q.qb_savepath||'')}' placeholder='/downloads/u2'></div>
-      <div class='switch full'><input id='edit_qb_paused' type='checkbox' ${q.qb_paused?'checked':''}><label for='edit_qb_paused' style='margin:0;color:var(--text)'>推送后暂停</label></div>
-    </div>
-    <div class='actions' style='margin-top:10px'>
-      <button class='ghost' onclick='openQb()'>打开 qB</button>
-      <button class='danger' onclick='removeQb(selectedQbIndex)'>删除当前模块</button>
-    </div>
-  `;
+function openQbConfig(i){
+  editingQbIndex=i;
+  const q=qbClients[i]||{};
+  const modal=document.getElementById('qbModal');
+  if(!modal) return;
+  document.getElementById('m_qb_name').value=q.name||'';
+  document.getElementById('m_qb_enabled').checked=q.enabled!==false;
+  document.getElementById('m_qb_url').value=q.qb_url||'';
+  document.getElementById('m_qb_username').value=q.qb_username||'';
+  document.getElementById('m_qb_password').value=q.qb_password||'';
+  document.getElementById('m_qb_category').value=q.qb_category||'';
+  document.getElementById('m_qb_savepath').value=q.qb_savepath||'';
+  document.getElementById('m_qb_paused').checked=!!q.qb_paused;
+  modal.style.display='flex';
+}
+
+function closeQbConfig(){
+  editingQbIndex=null;
+  const modal=document.getElementById('qbModal');
+  if(modal) modal.style.display='none';
+}
+
+function saveQbConfig(){
+  if(editingQbIndex===null || editingQbIndex<0 || editingQbIndex>=qbClients.length) return;
+  const q=qbClients[editingQbIndex];
+  q.name=document.getElementById('m_qb_name').value.trim();
+  q.enabled=document.getElementById('m_qb_enabled').checked;
+  q.qb_url=document.getElementById('m_qb_url').value.trim();
+  q.qb_username=document.getElementById('m_qb_username').value.trim();
+  q.qb_password=document.getElementById('m_qb_password').value.trim();
+  q.qb_category=document.getElementById('m_qb_category').value.trim();
+  q.qb_savepath=document.getElementById('m_qb_savepath').value.trim();
+  q.qb_paused=document.getElementById('m_qb_paused').checked;
+  closeQbConfig();
+  refreshQbStats();
 }
 
 function renderQbModules(items=[]){
@@ -454,7 +448,7 @@ function renderQbModules(items=[]){
     const it = items[i] || {};
     const ok = !!it.ok;
     return `
-      <div class='module-card ${i===selectedQbIndex?'active':''}' onclick='selectQb(${i})'>
+      <div class='module-card'>
         <div class='module-head'>
           <div style='font-weight:700'>${esc(q.name||('qb-'+(i+1)))}</div>
           <div class='badge'>${ok?"<span class='dot ok'></span>在线":"<span class='dot err'></span>离线"}</div>
@@ -467,6 +461,11 @@ function renderQbModules(items=[]){
           <div><div class='k'>总上传</div><div class='v'>${ok?fmtBytes(it.up_total):'-'}</div></div>
           <div><div class='k'>节点</div><div class='v'>${esc(q.qb_url||'-')}</div></div>
         </div>
+        <div class='actions' style='margin-top:8px'>
+          <button class='ghost' onclick='openQb(${i})'>打开 qB</button>
+          <button onclick='openQbConfig(${i})'>配置</button>
+          <button class='danger' onclick='removeQb(${i})'>删除</button>
+        </div>
         ${ok?'':`<div class='tip' style='margin-top:8px;color:#ff9aa2'>${esc(it.error||'连接失败')}</div>`}
       </div>
     `;
@@ -474,28 +473,13 @@ function renderQbModules(items=[]){
 }
 
 function addQb(){
-  applyEditorToState();
   qbClients.push({name:`qb-${qbClients.length+1}`,enabled:true,qb_url:'http://127.0.0.1:8080',qb_username:'',qb_password:'',qb_category:'',qb_savepath:'',qb_paused:false});
-  selectedQbIndex = qbClients.length-1;
-  renderQbEditor();
-  renderQbModules([]);
-}
-function selectQb(i){
-  applyEditorToState();
-  selectedQbIndex=i;
-  renderQbEditor();
   refreshQbStats();
 }
+
 function removeQb(i){
   qbClients.splice(i,1);
-  if(selectedQbIndex>=qbClients.length) selectedQbIndex=Math.max(0,qbClients.length-1);
-  renderQbEditor();
   refreshQbStats();
-}
-function openQb(){
-  applyEditorToState();
-  const q=qbClients[selectedQbIndex]||{};
-  if(q.qb_url) window.open(q.qb_url,'_blank');
 }
 
 async function refreshQbStats(){
@@ -522,7 +506,6 @@ async function load(){
      <button type='button' onclick='addQb()'>+ 添加QB配置</button>
    </div>
    <div id='qbModules' class='modules'><div class='tip'>加载中...</div></div>
-   <div id='qbEditor' class='qb-item'></div>
  </div>
  <div class='card'><div class='form'>
    <div class='full switch'><input id='enabled' type='checkbox' ${c.enabled?'checked':''}><label for='enabled' style='margin:0;color:var(--text)'>启用定时任务</label></div>
@@ -535,18 +518,37 @@ async function load(){
    <div><label>qB 分发模式</label><select id='qb_mode'><option value='round_robin' ${c.qb_mode==='round_robin'?'selected':''}>轮询分发</option><option value='all' ${c.qb_mode==='all'?'selected':''}>全部推送</option></select></div>
  </div>
  <div class='actions' style='margin-top:12px'><button onclick='save()'>保存配置</button><button onclick='runNow()'>立即执行一次</button><button class='ghost' onclick='refreshLogs()'>刷新日志</button></div>
- <div class='tip' style='margin-top:10px'>点击上方 qB 模块可编辑配置；点击“打开 qB”可跳转到对应面板。</div>
+ <div class='tip' style='margin-top:10px'>点击模块上的“配置”按钮才会弹出配置窗口。</div>
  </div>
- <div class='card'><div class='k' style='margin-bottom:8px'>最近日志（最多 200 行）</div><pre id='logs'>loading logs...</pre></div>`;
- selectedQbIndex = Math.min(selectedQbIndex, Math.max(0, qbClients.length-1));
- renderQbEditor();
+ <div class='card'><div class='k' style='margin-bottom:8px'>最近日志（最多 200 行）</div><pre id='logs'>loading logs...</pre></div>
+
+ <div id='qbModal' style='display:none;position:fixed;inset:0;background:#0008;z-index:999;align-items:center;justify-content:center;padding:14px'>
+   <div style='width:min(560px,100%);max-height:90vh;overflow:auto;background:#101833;border:1px solid #2a3558;border-radius:12px;padding:12px'>
+     <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px'>
+       <div style='font-weight:700'>qB 配置</div>
+       <button class='ghost' onclick='closeQbConfig()'>关闭</button>
+     </div>
+     <div class='editor-grid'>
+       <div><label>名称</label><input id='m_qb_name'></div>
+       <div class='switch'><input id='m_qb_enabled' type='checkbox'><label for='m_qb_enabled' style='margin:0;color:var(--text)'>启用</label></div>
+       <div><label>URL</label><input id='m_qb_url' placeholder='http://127.0.0.1:8080'></div>
+       <div><label>用户名</label><input id='m_qb_username'></div>
+       <div><label>密码</label><input id='m_qb_password' type='password'></div>
+       <div><label>分类</label><input id='m_qb_category'></div>
+       <div class='full'><label>保存路径</label><input id='m_qb_savepath' placeholder='/downloads/u2'></div>
+       <div class='switch full'><input id='m_qb_paused' type='checkbox'><label for='m_qb_paused' style='margin:0;color:var(--text)'>推送后暂停</label></div>
+     </div>
+     <div class='actions' style='margin-top:10px'>
+       <button onclick='saveQbConfig()'>保存当前模块配置</button>
+     </div>
+   </div>
+ </div>`;
  await refreshQbStats();
  if(qbStatsTimer) clearInterval(qbStatsTimer);
  qbStatsTimer = setInterval(refreshQbStats, 5000);
  await refreshLogs();
 }
 async function save(){
- applyEditorToState();
  const body={
   enabled:document.getElementById('enabled').checked,
   interval:parseInt(document.getElementById('interval').value||'120'),
