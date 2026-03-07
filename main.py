@@ -19,8 +19,8 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.10'
-QB_TORRENT_UP_LIMIT_BYTES = 50 * 1024 * 1024  # 50 MB/s per torrent
+APP_VERSION = '2026.3.11'
+QB_TORRENT_UP_LIMIT_BYTES = 50 * 1024 * 1024  # default: 50 MB/s per torrent
 LOCAL_TZ = ZoneInfo('Asia/Shanghai')
 
 DEFAULT_CONFIG = {
@@ -33,6 +33,7 @@ DEFAULT_CONFIG = {
     'limit': 20,
     'max_seeders': 5,
     'download_non_free': False,
+    'qb_up_limit_mb': 50,
     'qb_mode': 'round_robin',
     'qb_clients': [
         {
@@ -111,7 +112,7 @@ def qb_login(client: dict):
     return sess, qb_url, None
 
 
-def qb_add_torrent(client: dict, torrent_url: str):
+def qb_add_torrent(client: dict, torrent_url: str, up_limit_bytes: int = QB_TORRENT_UP_LIMIT_BYTES):
     sess, qb_url, err = qb_login(client)
     if err:
         return False, err
@@ -120,7 +121,7 @@ def qb_add_torrent(client: dict, torrent_url: str):
         'urls': torrent_url,
         'autoTMM': 'false',
         'paused': 'true' if client.get('qb_paused') else 'false',
-        'upLimit': str(QB_TORRENT_UP_LIMIT_BYTES),
+        'upLimit': str(max(0, int(up_limit_bytes))),
     }
     if client.get('qb_category'):
         data['category'] = str(client.get('qb_category'))
@@ -249,6 +250,8 @@ class Runner:
                     new_items.append(p)
 
             passkey = (cfg.get('u2_passkey') or '').strip()
+            up_limit_mb = int(cfg.get('qb_up_limit_mb', 50) or 0)
+            up_limit_bytes = max(0, up_limit_mb) * 1024 * 1024
             for p in new_items:
                 pid = p.get('promotion_id') or p.get('id')
                 tid = p.get('torrent_id')
@@ -271,9 +274,9 @@ class Runner:
                 torrent_url = f'https://u2.dmhy.org/download.php?id={tid}&passkey={passkey}&https=1'
                 for cli in targets:
                     cname = cli.get('name') or cli.get('qb_url') or 'unknown'
-                    ok, msg = qb_add_torrent(cli, torrent_url)
+                    ok, msg = qb_add_torrent(cli, torrent_url, up_limit_bytes)
                     if ok:
-                        log(f'pushed to qB[{cname}]: promotion={pid}, tid={tid}, upLimit={QB_TORRENT_UP_LIMIT_BYTES}B/s')
+                        log(f'pushed to qB[{cname}]: promotion={pid}, tid={tid}, upLimit={up_limit_bytes}B/s')
                     else:
                         log(f'push to qB[{cname}] failed: promotion={pid}, tid={tid}, err={msg}')
 
@@ -318,6 +321,7 @@ class ConfigIn(BaseModel):
     limit: int
     max_seeders: int
     download_non_free: bool
+    qb_up_limit_mb: int = 50
     qb_mode: str = 'round_robin'
     qb_clients: List[QBClientIn] = Field(default_factory=list)
 
@@ -526,6 +530,7 @@ async function load(){
    <div class='full'><label>U2 Passkey</label><input id='u2_passkey' type='password' value='${esc(c.u2_passkey||'')}'></div>
    <div><label>魔法范围（scope）</label><select id='scope'><option value='public' ${c.scope==='public'?'selected':''}>公共魔法（public）</option><option value='all' ${c.scope==='all'?'selected':''}>全部魔法（all）</option><option value='private' ${c.scope==='private'?'selected':''}>私人魔法（private）</option><option value='global' ${c.scope==='global'?'selected':''}>全局魔法（global）</option></select></div>
    <div><label>qB 分发模式</label><select id='qb_mode'><option value='round_robin' ${c.qb_mode==='round_robin'?'selected':''}>轮询分发</option><option value='all' ${c.qb_mode==='all'?'selected':''}>全部推送</option></select></div>
+   <div><label>单种上传限速(MB/s)</label><input id='qb_up_limit_mb' type='number' min='0' value='${c.qb_up_limit_mb??50}'></div>
  </div>
  <div class='actions' style='margin-top:12px'><button onclick='save()'>保存配置</button><button onclick='runNow()'>立即执行一次</button><button class='ghost' onclick='refreshLogs()'>刷新日志</button></div>
  <div class='tip' style='margin-top:10px'>点击模块上的“配置”按钮才会弹出配置窗口。</div>
@@ -570,6 +575,7 @@ async function save(){
   max_seeders:5,
   download_non_free:false,
   qb_mode:document.getElementById('qb_mode').value,
+  qb_up_limit_mb:parseInt(document.getElementById('qb_up_limit_mb').value||'50'),
   qb_clients:qbClients,
  };
  await fetch('/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -597,6 +603,7 @@ def get_config():
 def put_config(cfg: ConfigIn):
     data = cfg.dict()
     data['interval'] = max(10, int(data['interval']))
+    data['qb_up_limit_mb'] = max(0, int(data.get('qb_up_limit_mb', 50)))
     if not data.get('qb_clients'):
         data['qb_clients'] = []
     save_json(CONFIG_PATH, data)
