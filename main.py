@@ -18,7 +18,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.3'
+APP_VERSION = '2026.3.4'
 
 DEFAULT_CONFIG = {
     'enabled': False,
@@ -348,6 +348,7 @@ def index():
     h2{margin:0;font-size:24px}.badge{padding:6px 10px;border-radius:999px;border:1px solid var(--line);font-size:12px;color:var(--sub)}
     .grid{display:grid;gap:14px}.card{background:linear-gradient(180deg,var(--card),var(--bg2));border:1px solid var(--line);border-radius:14px;padding:14px}
     .status,.form{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.form{grid-template-columns:1fr 1fr}.full{grid-column:1/-1}
+    .status{grid-template-columns:repeat(3,minmax(0,1fr))}
     .k{font-size:12px;color:var(--sub);margin-bottom:4px}.v{font-size:14px;word-break:break-all}.dot{display:inline-block;width:8px;height:8px;border-radius:999px;margin-right:6px}
     .ok{background:var(--ok)} .err{background:var(--err)} .warn{background:var(--warn)} label{font-size:12px;color:var(--sub);display:block;margin-bottom:6px}
     input,select{width:100%;background:#0e1528;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:10px}
@@ -362,8 +363,23 @@ def index():
     .module-card.active{border-color:#6ea1ff;box-shadow:0 0 0 1px #6ea1ff33 inset}
     .module-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
     .editor-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-    @media (max-width:960px){.editor-grid{grid-template-columns:1fr}}
-    @media (max-width:760px){.form,.status,.modules{grid-template-columns:1fr}}
+    @media (max-width:960px){
+      .editor-grid{grid-template-columns:1fr}
+      .status{grid-template-columns:1fr 1fr}
+    }
+    @media (max-width:760px){
+      .wrap{margin:10px auto;padding:0 10px}
+      h2{font-size:20px;line-height:1.2}
+      .card{padding:10px;border-radius:10px}
+      .form,.status,.modules{grid-template-columns:1fr}
+      .actions{display:grid;grid-template-columns:1fr;gap:8px}
+      .actions button{width:100%}
+      input,select,button{font-size:16px}
+      .module-head{gap:8px}
+      .k{font-size:11px}
+      .v{font-size:13px}
+      .badge{font-size:11px;padding:4px 8px}
+    }
   </style>
 </head>
 <body>
