@@ -4,6 +4,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List
+from zoneinfo import ZoneInfo
 
 import requests
 from fastapi import FastAPI
@@ -18,8 +19,9 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.9'
+APP_VERSION = '2026.3.10'
 QB_TORRENT_UP_LIMIT_BYTES = 50 * 1024 * 1024  # 50 MB/s per torrent
+LOCAL_TZ = ZoneInfo('Asia/Shanghai')
 
 DEFAULT_CONFIG = {
     'enabled': False,
@@ -48,7 +50,7 @@ DEFAULT_CONFIG = {
 
 
 def now_iso():
-    return datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+    return datetime.now(LOCAL_TZ).strftime('%Y-%m-%d %H:%M:%S CST')
 
 
 def log(msg: str):
