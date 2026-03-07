@@ -18,6 +18,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
+APP_VERSION = '2026.3.1'
 
 DEFAULT_CONFIG = {
     'enabled': False,
@@ -364,7 +365,7 @@ def index():
 </head>
 <body>
   <div class='wrap'>
-    <div class='title'><h2>Catch Magic Web</h2><div class='badge' id='runBadge'>状态读取中...</div></div>
+    <div class='title'><h2>Catch Magic Web <span style='font-size:13px;color:var(--sub);font-weight:500'>v__APP_VERSION__</span></h2><div class='badge' id='runBadge'>状态读取中...</div></div>
     <div id='app' class='grid'>loading...</div>
   </div>
 <script>
@@ -508,7 +509,12 @@ async function refreshLogs(){ const t=await fetch('/api/logs').then(r=>r.text())
 load();
 </script>
 </body></html>
-"""
+""".replace('__APP_VERSION__', APP_VERSION)
+
+
+@app.get('/api/version')
+def get_version():
+    return {'version': APP_VERSION}
 
 
 @app.get('/api/config')
