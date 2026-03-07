@@ -1,0 +1,24 @@
+{
+  "enabled": false,
+  "interval": 120,
+  "u2_api_base": "https://u2.kysdm.com/api/v2",
+  "u2_api_token": "YOUR_U2_API_TOKEN",
+  "u2_passkey": "YOUR_U2_PASSKEY",
+  "scope": "public",
+  "limit": 20,
+  "max_seeders": 5,
+  "download_non_free": false,
+  "qb_mode": "round_robin",
+  "qb_clients": [
+    {
+      "name": "qb-1",
+      "enabled": true,
+      "qb_url": "http://127.0.0.1:8080",
+      "qb_username": "admin",
+      "qb_password": "YOUR_QB_PASSWORD",
+      "qb_category": "",
+      "qb_savepath": "",
+      "qb_paused": false
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+version: '3.8'
+services:
+  catch-magic-web:
+    build: .
+    container_name: catch-magic-web
+    restart: always
+    ports:
+      - "18088:8080"
+    volumes:
+      - ./data:/data
+      - ./logs:/logs
