@@ -18,7 +18,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.7'
+APP_VERSION = '2026.3.8'
 
 DEFAULT_CONFIG = {
     'enabled': False,
@@ -343,27 +343,27 @@ def index():
   <title>Catch Magic Web</title>
   <style>
     :root{--bg:#0b1020;--bg2:#131a2e;--card:#151d34;--line:#263150;--text:#e7ecff;--sub:#9eadcf;--ok:#22c55e;--warn:#f59e0b;--err:#ef4444;--pri:#4f7cff;--pri2:#335ed8;--module1:#162241;--module2:#0f1a35}
-    body.theme-light{--bg:#f4f7ff;--bg2:#ffffff;--card:#ffffff;--line:#dce4ff;--text:#1d2742;--sub:#5b6b91;--ok:#16a34a;--warn:#d97706;--err:#dc2626;--pri:#3b82f6;--pri2:#245fd1;--module1:#eef4ff;--module2:#ffffff}
+    body.theme-light{--bg:#f4f7ff;--bg2:#ffffff;--card:#ffffff;--line:#dce4ff;--text:#1a2440;--sub:#4a5f8f;--ok:#15803d;--warn:#b45309;--err:#b91c1c;--pri:#2563eb;--pri2:#1d4ed8;--module1:#f4f7ff;--module2:#ffffff}
     *{box-sizing:border-box} body{margin:0;background:radial-gradient(1200px 800px at 20% -10%,#1a2650 0%,var(--bg) 50%);color:var(--text);font-family:Inter,Segoe UI,Arial,sans-serif;transition:background .2s,color .2s}
     body.theme-light{background:linear-gradient(180deg,#f8faff 0%,#eef3ff 100%)}
     .wrap{max-width:1100px;margin:24px auto;padding:0 16px;width:100%}.title{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:14px}
     h2{margin:0;font-size:24px;line-height:1.2}.badge{padding:6px 10px;border-radius:999px;border:1px solid var(--line);font-size:12px;color:var(--sub)}
     .grid{display:grid;gap:14px}.card{background:linear-gradient(180deg,var(--card),var(--bg2));border:1px solid var(--line);border-radius:14px;padding:14px;overflow:hidden}
-    .status,.form{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.form{grid-template-columns:1fr 1fr}.full{grid-column:1/-1}
+    .status,.form{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.form{grid-template-columns:1fr 1fr}.full{grid-column:1/-1}
     .status{grid-template-columns:repeat(3,minmax(0,1fr))}
     .k{font-size:12px;color:var(--sub);margin-bottom:4px}.v{font-size:14px;word-break:break-word;overflow-wrap:anywhere;min-width:0}.dot{display:inline-block;width:8px;height:8px;border-radius:999px;margin-right:6px}
     .ok{background:var(--ok)} .err{background:var(--err)} .warn{background:var(--warn)} label{font-size:12px;color:var(--sub);display:block;margin-bottom:6px}
-    input,select{width:100%;max-width:100%;background:#0e1528;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:10px}
+    input,select{width:100%;max-width:100%;background:#0e1528;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:10px}\n    body.theme-light input,body.theme-light select{background:#ffffff;color:#12203f;border-color:#b8c8f5}\n    body.theme-light input::placeholder,body.theme-light select::placeholder{color:#6b7fae;opacity:1}
     input:focus,select:focus{outline:none;border-color:var(--pri)} .switch{display:flex;align-items:center;gap:10px}.switch input{width:auto}
     .actions{display:flex;gap:10px;flex-wrap:wrap} button{border:0;border-radius:10px;padding:10px 14px;color:white;background:var(--pri);cursor:pointer;font-weight:600}
     button:hover{background:var(--pri2)} button.ghost{background:transparent;border:1px solid var(--line);color:var(--text)} button.danger{background:#b4232a}
     pre{margin:0;background:#0a0f1f;color:#c7d2ff;border:1px solid var(--line);border-radius:10px;padding:12px;max-height:360px;overflow:auto;line-height:1.45}
     .tip{font-size:12px;color:var(--sub)} .qb-item{border:1px dashed var(--line);border-radius:12px;padding:10px;margin-top:10px}
     .modules{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
-    .module-card{transition:.18s;border:1px solid var(--line);border-radius:14px;padding:12px;background:linear-gradient(180deg,var(--module1),var(--module2));box-shadow:0 6px 18px #00000014}
+    .module-card{transition:.18s;border:1px solid var(--line);border-radius:12px;padding:9px;background:linear-gradient(180deg,var(--module1),var(--module2));box-shadow:0 4px 12px #00000010}
     .module-card:hover{border-color:var(--pri);transform:translateY(-1px)}
     .module-card.active{border-color:var(--pri);box-shadow:0 0 0 1px #6ea1ff33 inset}
-    .module-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+    .module-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
     .editor-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
     @media (max-width:980px){
       .editor-grid{grid-template-columns:1fr}
@@ -373,7 +373,7 @@ def index():
     @media (max-width:680px){
       .wrap{margin:8px auto;padding:0 8px}
       h2{font-size:18px;line-height:1.2}
-      .card{padding:10px;border-radius:10px}
+      .card{padding:8px;border-radius:10px}
       .form,.status,.modules{grid-template-columns:1fr}
       .actions{display:grid;grid-template-columns:1fr;gap:8px}
       .actions button{width:100%}
@@ -466,7 +466,7 @@ function renderQbModules(items=[]){
           <div><div class='k'>总上传</div><div class='v'>${ok?fmtBytes(it.up_total):'-'}</div></div>
           <div><div class='k'>节点</div><div class='v'>${esc(q.qb_url||'-')}</div></div>
         </div>
-        <div class='actions' style='margin-top:8px'>
+        <div class='actions' style='margin-top:6px'>
           <button class='ghost' onclick='openQb(${i})'>打开 qB</button>
           <button onclick='openQbConfig(${i})'>配置</button>
           <button class='danger' onclick='removeQb(${i})'>删除</button>
