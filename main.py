@@ -19,7 +19,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.15'
+APP_VERSION = '2026.3.17'
 QB_TORRENT_UP_LIMIT_BYTES = 50 * 1024 * 1024  # default: 50 MB/s per torrent
 LOCAL_TZ = ZoneInfo('Asia/Shanghai')
 
@@ -66,19 +66,26 @@ def log(msg: str):
 
 def tg_notify(cfg: dict, text: str):
     if not cfg.get('tg_enabled'):
-        return
+        return False, 'TG未启用'
     token = (cfg.get('tg_bot_token') or '').strip()
     chat_id = str(cfg.get('tg_chat_id') or '').strip()
     if not (token and chat_id):
-        return
+        return False, 'TG配置不完整（缺少 Bot Token 或 Chat ID）'
     try:
-        requests.post(
+        resp = requests.post(
             f'https://api.telegram.org/bot{token}/sendMessage',
             json={'chat_id': chat_id, 'text': text},
             timeout=15,
         )
+        if resp.status_code != 200:
+            return False, f'HTTP {resp.status_code}: {resp.text[:120]}'
+        data = resp.json() if resp.text else {}
+        if not data.get('ok', False):
+            return False, data.get('description', 'TG接口返回失败')
+        return True, 'ok'
     except Exception as e:
         log(f'TG通知发送失败：{e}')
+        return False, str(e)
 
 
 def load_json(path: Path, default):
@@ -281,7 +288,9 @@ class Runner:
                 seeders = p.get('seeders', '?')
                 log(f'检测到新的推广：ID={pid}，线程号={tid}，dr={dr}，种子用户={seeders}')
                 if cfg.get('tg_notify_new', True):
-                    tg_notify(cfg, f'🆕 U2新优惠\nID: {pid}\nTID: {tid}\nDR: {dr}\nSeeders: {seeders}')
+                    ok_tg, msg_tg = tg_notify(cfg, f'🆕 U2新优惠\nID: {pid}\nTID: {tid}\nDR: {dr}\nSeeders: {seeders}')
+                    if not ok_tg:
+                        log(f'TG通知未发送：{msg_tg}')
 
                 if not tid:
                     log(f'跳过推送到 qB：推广号={pid} 缺少线程号')
@@ -316,7 +325,9 @@ class Runner:
             save_json(STATE_PATH, state)
             log(f'运行失败：{e}')
             if cfg.get('tg_notify_error', True):
-                tg_notify(cfg, f'❌ U2任务执行失败\n{e}')
+                ok_tg, msg_tg = tg_notify(cfg, f'❌ U2任务执行失败\n{e}')
+                if not ok_tg:
+                    log(f'TG通知未发送：{msg_tg}')
         finally:
             self._running = False
             self._lock.release()
@@ -426,7 +437,7 @@ def index():
 </head>
 <body>
   <div class='wrap'>
-    <div class='title'><h2>Catch Magic Web <span style='font-size:13px;color:var(--sub);font-weight:500'>v__APP_VERSION__</span></h2><div class='actions'><button class='ghost' type='button' onclick='toggleTheme()'>🌗 主题切换</button><div class='badge' id='runBadge'>状态读取中...</div></div></div>
+    <div class='title'><h2>Catch Magic Web <span style='font-size:13px;color:var(--sub);font-weight:500'>v__APP_VERSION__</span></h2><div class='actions'><button type='button' onclick='openTGModal()'>TG配置</button><button class='ghost' type='button' onclick='toggleTheme()'>🌗 主题切换</button><div class='badge' id='runBadge'>状态读取中...</div></div></div>
     <div id='app' class='grid'>loading...</div>
   </div>
 <script>
@@ -442,6 +453,42 @@ function statusBadge(s){ if(s.running) return `<span class='dot warn'></span>执
 function getTheme(){ return localStorage.getItem('cm_theme')||'dark'; }
 function applyTheme(){ const t=getTheme(); document.body.classList.toggle('theme-light', t==='light'); }
 function toggleTheme(){ localStorage.setItem('cm_theme', getTheme()==='light'?'dark':'light'); applyTheme(); }
+
+
+function openTGModal(){
+  const m=document.getElementById('tgModal');
+  if(!m) return;
+  m.style.display='flex';
+}
+function closeTGModal(){
+  const m=document.getElementById('tgModal');
+  if(m) m.style.display='none';
+}
+function setTGForm(c){
+  const e=document.getElementById('tg_enabled'); if(!e) return;
+  e.checked=!!c.tg_enabled;
+  document.getElementById('tg_bot_token').value=c.tg_bot_token||'';
+  document.getElementById('tg_chat_id').value=c.tg_chat_id||'';
+  document.getElementById('tg_notify_new').checked=(c.tg_notify_new!==false);
+  document.getElementById('tg_notify_error').checked=(c.tg_notify_error!==false);
+}
+function collectTG(){
+  return {
+    tg_enabled: document.getElementById('tg_enabled')?.checked||false,
+    tg_bot_token: (document.getElementById('tg_bot_token')?.value||'').trim(),
+    tg_chat_id: (document.getElementById('tg_chat_id')?.value||'').trim(),
+    tg_notify_new: document.getElementById('tg_notify_new')?.checked!==false,
+    tg_notify_error: document.getElementById('tg_notify_error')?.checked!==false,
+  }
+}
+async function saveTGConfigOnly(){
+  const c=await j('/api/config');
+  const t=collectTG();
+  const body={...c,...t, qb_clients: qbClients};
+  await fetch('/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  alert('TG配置已保存');
+  closeTGModal();
+}
 
 function openQb(i){
   const q=qbClients[i]||{};
@@ -563,16 +610,6 @@ async function load(){
    <div><label>qB 分发模式</label><select id='qb_mode'><option value='round_robin' ${c.qb_mode==='round_robin'?'selected':''}>轮询分发</option><option value='all' ${c.qb_mode==='all'?'selected':''}>全部推送</option></select></div>
    <div><label>单种上传限速(MB/s)</label><input id='qb_up_limit_mb' type='number' min='0' value='${c.qb_up_limit_mb??50}'></div>
  </div>
- <div class='card'>
-   <div class='k' style='margin-bottom:8px'>Telegram 通知配置</div>
-   <div class='form'>
-     <div class='switch'><input id='tg_enabled' type='checkbox'><label for='tg_enabled' style='margin:0;color:var(--text)'>启用TG通知</label></div>
-     <label>Bot Token<input id='tg_bot_token' placeholder='123456:ABC...'></label>
-     <label>Chat ID<input id='tg_chat_id' placeholder='例如 1036463619'></label>
-     <div class='switch'><input id='tg_notify_new' type='checkbox'><label for='tg_notify_new' style='margin:0;color:var(--text)'>新优惠通知</label></div>
-     <div class='switch'><input id='tg_notify_error' type='checkbox'><label for='tg_notify_error' style='margin:0;color:var(--text)'>失败通知</label></div>
-   </div>
- </div>
  <div class='actions' style='margin-top:12px'><button onclick='save()'>保存配置</button><button onclick='runNow()'>立即执行一次</button><button onclick='testTG()'>测试TG通知</button><button class='ghost' onclick='refreshLogs()'>刷新日志</button></div>
  <div class='tip' style='margin-top:10px'>点击模块上的“配置”按钮才会弹出配置窗口。</div>
  </div>
@@ -597,8 +634,31 @@ async function load(){
      <div class='actions' style='margin-top:10px'>
        <button onclick='saveQbConfig()'>保存当前模块配置</button>
      </div>
+  
+
+ <div id='tgModal' style='display:none;position:fixed;inset:0;background:#0008;z-index:999;align-items:center;justify-content:center;padding:14px'>
+   <div style='width:min(560px,100%);max-height:90vh;overflow:auto;background:#101833;border:1px solid #2a3558;border-radius:12px;padding:12px'>
+     <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px'>
+       <div style='font-weight:700'>Telegram 配置</div>
+       <button class='ghost' onclick='closeTGModal()'>关闭</button>
+     </div>
+     <div class='editor-grid'>
+       <div class='switch full'><input id='tg_enabled' type='checkbox'><label for='tg_enabled' style='margin:0;color:var(--text)'>启用TG通知</label></div>
+       <div class='full'><label>Bot Token</label><input id='tg_bot_token' placeholder='123456:ABC...'></div>
+       <div class='full'><label>Chat ID</label><input id='tg_chat_id' placeholder='例如 1036463619'></div>
+       <div class='switch'><input id='tg_notify_new' type='checkbox'><label for='tg_notify_new' style='margin:0;color:var(--text)'>新推广通知</label></div>
+       <div class='switch'><input id='tg_notify_error' type='checkbox'><label for='tg_notify_error' style='margin:0;color:var(--text)'>失败告警通知</label></div>
+     </div>
+     <div class='actions' style='margin-top:10px'>
+       <button onclick='saveTGConfigOnly()'>保存TG配置</button>
+       <button onclick='testTG()'>测试通知</button>
+     </div>
    </div>
+ </div>
+
+ </div>
  </div>`;
+ setTGForm(c);
  await refreshQbStats();
  if(qbStatsTimer) clearInterval(qbStatsTimer);
  qbStatsTimer = setInterval(refreshQbStats, 5000);
@@ -618,11 +678,12 @@ async function save(){
   qb_mode:document.getElementById('qb_mode').value,
   qb_up_limit_mb:parseInt(document.getElementById('qb_up_limit_mb').value||'50'),
   qb_clients:qbClients,
+  ...collectTG(),
  };
  await fetch('/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
  alert('配置已保存'); load();
 }
-async function testTG(){ const r=await fetch('/api/tg/test',{method:'POST'}); const d=await r.json(); alert(d.ok?'测试通知已发送':'测试通知失败: '+(d.error||'unknown')); }
+async function testTG(){ const r=await fetch('/api/tg/test',{method:'POST'}); const d=await r.json(); alert(d.ok?('测试通知已发送：'+(d.message||'')):('测试通知失败：'+(d.error||'unknown'))); }
 async function runNow(){ await fetch('/api/run',{method:'POST'}); setTimeout(load, 900); }
 async function refreshLogs(){ const t=await fetch('/api/logs').then(r=>r.text()); const node=document.getElementById('logs'); if(node) node.textContent=t||'(暂无日志)'; }
 load();
@@ -680,8 +741,10 @@ def qb_stats():
 def tg_test():
     cfg = load_config()
     try:
-        tg_notify(cfg, f'✅ U2 TG通知测试\n时间: {now_iso()}\n版本: {APP_VERSION}')
-        return {'ok': True}
+        ok, msg = tg_notify(cfg, f'✅ U2 TG通知测试\n时间: {now_iso()}\n版本: {APP_VERSION}')
+        if ok:
+            return {'ok': True, 'message': '已发送'}
+        return {'ok': False, 'error': msg}
     except Exception as e:
         return {'ok': False, 'error': str(e)}
 
