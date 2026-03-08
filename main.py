@@ -19,7 +19,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.11'
+APP_VERSION = '2026.3.13'
 QB_TORRENT_UP_LIMIT_BYTES = 50 * 1024 * 1024  # default: 50 MB/s per torrent
 LOCAL_TZ = ZoneInfo('Asia/Shanghai')
 
@@ -35,6 +35,11 @@ DEFAULT_CONFIG = {
     'download_non_free': False,
     'qb_up_limit_mb': 50,
     'qb_mode': 'round_robin',
+    'tg_enabled': False,
+    'tg_bot_token': '',
+    'tg_chat_id': '',
+    'tg_notify_new': True,
+    'tg_notify_error': True,
     'qb_clients': [
         {
             'name': 'qb-1',
@@ -57,6 +62,23 @@ def now_iso():
 def log(msg: str):
     with open(APP_LOG, 'a', encoding='utf-8') as f:
         f.write(f'[{now_iso()}] {msg}\n')
+
+
+def tg_notify(cfg: dict, text: str):
+    if not cfg.get('tg_enabled'):
+        return
+    token = (cfg.get('tg_bot_token') or '').strip()
+    chat_id = str(cfg.get('tg_chat_id') or '').strip()
+    if not (token and chat_id):
+        return
+    try:
+        requests.post(
+            f'https://api.telegram.org/bot{token}/sendMessage',
+            json={'chat_id': chat_id, 'text': text},
+            timeout=15,
+        )
+    except Exception as e:
+        log(f'TG通知发送失败 (TG notify failed): {e}')
 
 
 def load_json(path: Path, default):
@@ -187,11 +209,11 @@ class Runner:
         self._stop = False
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
-        log('scheduler started')
+        log('调度器已启动 (scheduler started)')
 
     def stop(self):
         self._stop = True
-        log('scheduler stopping')
+        log('调度器停止中 (scheduler stopping)')
 
     def _loop(self):
         while not self._stop:
@@ -217,7 +239,7 @@ class Runner:
                 state['last_run'] = now_iso()
                 state['last_error'] = 'u2_api_token 为空，跳过执行'
                 save_json(STATE_PATH, state)
-                log('run skipped: empty u2_api_token')
+                log('执行跳过：u2_api_token 为空 (run skipped: empty u2_api_token)')
                 return
 
             url = f"{cfg.get('u2_api_base').rstrip('/')}/promotions"
@@ -257,18 +279,20 @@ class Runner:
                 tid = p.get('torrent_id')
                 dr = p.get('download_ratio')
                 seeders = p.get('seeders', '?')
-                log(f'new promotion detected: id={pid}, tid={tid}, dr={dr}, seeders={seeders}')
+                log(f'发现新优惠 (new promotion): id={pid}, tid={tid}, dr={dr}, seeders={seeders}')
+                if cfg.get('tg_notify_new', True):
+                    tg_notify(cfg, f'🆕 U2新优惠\nID: {pid}\nTID: {tid}\nDR: {dr}\nSeeders: {seeders}')
 
                 if not tid:
-                    log(f'skip push to qB: missing tid for promotion {pid}')
+                    log(f'跳过推送到 qB：优惠缺少 tid (skip push to qB: missing tid), promotion={pid}')
                     continue
                 if not passkey:
-                    log('skip push to qB: u2_passkey 未配置')
+                    log('跳过推送到 qB：u2_passkey 未配置 (skip push to qB: u2_passkey missing)')
                     continue
 
                 targets = pick_qb_clients(cfg, state)
                 if not targets:
-                    log('skip push to qB: 没有启用的 qB 客户端')
+                    log('跳过推送到 qB：没有启用的客户端 (skip push to qB: no enabled clients)')
                     continue
 
                 torrent_url = f'https://u2.dmhy.org/download.php?id={tid}&passkey={passkey}&https=1'
@@ -276,21 +300,23 @@ class Runner:
                     cname = cli.get('name') or cli.get('qb_url') or 'unknown'
                     ok, msg = qb_add_torrent(cli, torrent_url, up_limit_bytes)
                     if ok:
-                        log(f'pushed to qB[{cname}]: promotion={pid}, tid={tid}, upLimit={up_limit_bytes}B/s')
+                        log(f'已推送到 qB[{cname}] (pushed): promotion={pid}, tid={tid}, upLimit={up_limit_bytes}B/s')
                     else:
-                        log(f'push to qB[{cname}] failed: promotion={pid}, tid={tid}, err={msg}')
+                        log(f'推送到 qB[{cname}] 失败 (push failed): promotion={pid}, tid={tid}, err={msg}')
 
             state['last_seen'] = [str((p.get('promotion_id') or p.get('id'))) for p in data if (p.get('promotion_id') or p.get('id'))][:200]
             state['last_run'] = now_iso()
             state['last_error'] = None
             save_json(STATE_PATH, state)
-            log(f'run done: fetched={len(data)}, new={len(new_items)}')
+            log(f'执行完成 (run done): fetched={len(data)}, new={len(new_items)}')
         except Exception as e:
             state = load_json(STATE_PATH, {'last_seen': [], 'last_run': None, 'last_error': None, 'qb_rr_index': 0})
             state['last_run'] = now_iso()
             state['last_error'] = str(e)
             save_json(STATE_PATH, state)
-            log(f'run failed: {e}')
+            log(f'执行失败 (run failed): {e}')
+            if cfg.get('tg_notify_error', True):
+                tg_notify(cfg, f'❌ U2任务执行失败\n{e}')
         finally:
             self._running = False
             self._lock.release()
@@ -323,6 +349,11 @@ class ConfigIn(BaseModel):
     download_non_free: bool
     qb_up_limit_mb: int = 50
     qb_mode: str = 'round_robin'
+    tg_enabled: bool = False
+    tg_bot_token: str = ''
+    tg_chat_id: str = ''
+    tg_notify_new: bool = True
+    tg_notify_error: bool = True
     qb_clients: List[QBClientIn] = Field(default_factory=list)
 
 
@@ -532,7 +563,17 @@ async function load(){
    <div><label>qB 分发模式</label><select id='qb_mode'><option value='round_robin' ${c.qb_mode==='round_robin'?'selected':''}>轮询分发</option><option value='all' ${c.qb_mode==='all'?'selected':''}>全部推送</option></select></div>
    <div><label>单种上传限速(MB/s)</label><input id='qb_up_limit_mb' type='number' min='0' value='${c.qb_up_limit_mb??50}'></div>
  </div>
- <div class='actions' style='margin-top:12px'><button onclick='save()'>保存配置</button><button onclick='runNow()'>立即执行一次</button><button class='ghost' onclick='refreshLogs()'>刷新日志</button></div>
+ <div class='card'>
+   <div class='k' style='margin-bottom:8px'>Telegram 通知配置</div>
+   <div class='form'>
+     <div class='switch'><input id='tg_enabled' type='checkbox'><label for='tg_enabled' style='margin:0;color:var(--text)'>启用TG通知</label></div>
+     <label>Bot Token<input id='tg_bot_token' placeholder='123456:ABC...'></label>
+     <label>Chat ID<input id='tg_chat_id' placeholder='例如 1036463619'></label>
+     <div class='switch'><input id='tg_notify_new' type='checkbox'><label for='tg_notify_new' style='margin:0;color:var(--text)'>新优惠通知</label></div>
+     <div class='switch'><input id='tg_notify_error' type='checkbox'><label for='tg_notify_error' style='margin:0;color:var(--text)'>失败通知</label></div>
+   </div>
+ </div>
+ <div class='actions' style='margin-top:12px'><button onclick='save()'>保存配置</button><button onclick='runNow()'>立即执行一次</button><button onclick='testTG()'>测试TG通知</button><button class='ghost' onclick='refreshLogs()'>刷新日志</button></div>
  <div class='tip' style='margin-top:10px'>点击模块上的“配置”按钮才会弹出配置窗口。</div>
  </div>
  <div class='card'><div class='k' style='margin-bottom:8px'>最近日志（最多 200 行）</div><pre id='logs'>loading logs...</pre></div>
@@ -581,6 +622,7 @@ async function save(){
  await fetch('/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
  alert('配置已保存'); load();
 }
+async function testTG(){ const r=await fetch('/api/tg/test',{method:'POST'}); const d=await r.json(); alert(d.ok?'测试通知已发送':'测试通知失败: '+(d.error||'unknown')); }
 async function runNow(){ await fetch('/api/run',{method:'POST'}); setTimeout(load, 900); }
 async function refreshLogs(){ const t=await fetch('/api/logs').then(r=>r.text()); const node=document.getElementById('logs'); if(node) node.textContent=t||'(暂无日志)'; }
 load();
@@ -607,7 +649,7 @@ def put_config(cfg: ConfigIn):
     if not data.get('qb_clients'):
         data['qb_clients'] = []
     save_json(CONFIG_PATH, data)
-    log('config updated')
+    log('配置已更新 (config updated)')
     return {'ok': True}
 
 
@@ -631,6 +673,17 @@ def qb_stats():
     stats = [qb_fetch_stats(c) for c in clients]
     return {'items': stats, 'mode': cfg.get('qb_mode', 'round_robin')}
 
+
+
+
+@app.post('/api/tg/test')
+def tg_test():
+    cfg = load_config()
+    try:
+        tg_notify(cfg, f'✅ U2 TG通知测试\n时间: {now_iso()}\n版本: {APP_VERSION}')
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
 
 @app.get('/api/logs', response_class=PlainTextResponse)
 def logs():
