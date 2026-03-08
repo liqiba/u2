@@ -19,7 +19,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.24'
+APP_VERSION = '2026.3.26'
 QB_TORRENT_UP_LIMIT_BYTES = 50 * 1024 * 1024  # default: 50 MB/s per torrent
 LOCAL_TZ = ZoneInfo('Asia/Shanghai')
 
@@ -604,10 +604,8 @@ async function load(){
    <div id='qbModules' class='modules'><div class='tip'>加载中...</div></div>
  </div>
 
- <div class='card'><div class='actions'><button onclick='openMainConfigModal()'>打开基础配置</button></div><div class='tip' style='margin-top:8px'>基础配置改为弹窗模式，点击按钮进行编辑。</div></div>
-
  <div id='mainCfgModal' style='display:none;position:fixed;inset:0;background:#0008;z-index:1000;align-items:center;justify-content:center;padding:14px'>
-   <div style='width:min(920px,100%);max-height:90vh;overflow:auto;background:#101833;border:1px solid #2a3558;border-radius:12px;padding:12px'>
+   <div style='width:min(920px,100%);max-height:90vh;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px'>
      <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px'>
        <div style='font-weight:700;color:var(--text)'>基础配置</div>
        <button class='ghost' onclick='closeMainConfigModal()'>关闭</button>
@@ -632,9 +630,9 @@ async function load(){
  <div class='card'><div class='k' style='margin-bottom:8px'>最近日志（最多 200 行）</div><pre id='logs'>loading logs...</pre></div>
 
  <div id='qbModal' style='display:none;position:fixed;inset:0;background:#0008;z-index:999;align-items:center;justify-content:center;padding:14px'>
-   <div style='width:min(560px,100%);max-height:90vh;overflow:auto;background:#101833;border:1px solid #2a3558;border-radius:12px;padding:12px'>
+   <div style='width:min(560px,100%);max-height:90vh;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px'>
      <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px'>
-       <div style='font-weight:700'>qB 配置</div>
+       <div style='font-weight:700;color:var(--text)'>qB 配置</div>
        <button class='ghost' onclick='closeQbConfig()'>关闭</button>
      </div>
      <div class='editor-grid'>
@@ -654,7 +652,7 @@ async function load(){
  </div>
 
  <div id='tgModal' style='display:none;position:fixed;inset:0;background:#0008;z-index:1000;align-items:center;justify-content:center;padding:14px'>
-   <div style='width:min(560px,100%);max-height:90vh;overflow:auto;background:#101833;border:1px solid #2a3558;border-radius:12px;padding:12px'>
+   <div style='width:min(560px,100%);max-height:90vh;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px'>
      <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px'>
        <div style='font-weight:700;color:var(--text)'>Telegram 配置</div>
        <button class='ghost' onclick='closeTGModal()'>关闭</button>
