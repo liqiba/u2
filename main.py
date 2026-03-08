@@ -19,7 +19,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.26'
+APP_VERSION = '2026.3.28'
 QB_TORRENT_UP_LIMIT_BYTES = 50 * 1024 * 1024  # default: 50 MB/s per torrent
 LOCAL_TZ = ZoneInfo('Asia/Shanghai')
 
@@ -765,4 +765,6 @@ def logs():
     if not APP_LOG.exists():
         return ''
     txt = APP_LOG.read_text(encoding='utf-8', errors='ignore')
-    return '\n'.join(txt.splitlines()[-200:])
+    lines = txt.splitlines()[-200:]
+    lines.reverse()
+    return '\n'.join(lines)
