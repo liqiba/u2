@@ -19,7 +19,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.17'
+APP_VERSION = '2026.3.20'
 QB_TORRENT_UP_LIMIT_BYTES = 50 * 1024 * 1024  # default: 50 MB/s per torrent
 LOCAL_TZ = ZoneInfo('Asia/Shanghai')
 
@@ -397,7 +397,7 @@ def index():
     *{box-sizing:border-box} body{margin:0;background:radial-gradient(1200px 800px at 20% -10%,#1a2650 0%,var(--bg) 50%);color:var(--text);font-family:Inter,Segoe UI,Arial,sans-serif;transition:background .2s,color .2s}
     body.theme-light{background:linear-gradient(180deg,#f8faff 0%,#eef3ff 100%)}
     .wrap{max-width:1100px;margin:24px auto;padding:0 16px;width:100%}.title{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:14px}
-    h2{margin:0;font-size:24px;line-height:1.2}.badge{padding:6px 10px;border-radius:999px;border:1px solid var(--line);font-size:12px;color:var(--sub)}
+    h2{margin:0;font-size:24px;line-height:1.2}.badge{display:inline-flex;align-items:center;height:36px;padding:0 12px;border-radius:999px;border:1px solid var(--line);font-size:12px;color:var(--sub);white-space:nowrap}
     .grid{display:grid;gap:14px}.card{background:linear-gradient(180deg,var(--card),var(--bg2));border:1px solid var(--line);border-radius:14px;padding:14px;overflow:hidden}
     .status,.form{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.form{grid-template-columns:1fr 1fr}.full{grid-column:1/-1}
     .status{grid-template-columns:repeat(3,minmax(0,1fr))}
@@ -437,7 +437,7 @@ def index():
 </head>
 <body>
   <div class='wrap'>
-    <div class='title'><h2>Catch Magic Web <span style='font-size:13px;color:var(--sub);font-weight:500'>v__APP_VERSION__</span></h2><div class='actions'><button type='button' onclick='openTGModal()'>TG配置</button><button class='ghost' type='button' onclick='toggleTheme()'>🌗 主题切换</button><div class='badge' id='runBadge'>状态读取中...</div></div></div>
+    <div class='title'><h2>Catch Magic Web <span style='font-size:13px;color:var(--sub);font-weight:500'>v__APP_VERSION__</span></h2><div class='actions'><button class='ghost' type='button' onclick='openTGModal()'>TG配置</button><button class='ghost' type='button' onclick='toggleTheme()'>🌗 主题切换</button><div class='badge' id='runBadge'>状态读取中...</div></div></div>
     <div id='app' class='grid'>loading...</div>
   </div>
 <script>
@@ -634,9 +634,10 @@ async function load(){
      <div class='actions' style='margin-top:10px'>
        <button onclick='saveQbConfig()'>保存当前模块配置</button>
      </div>
-  
+   </div>
+ </div>
 
- <div id='tgModal' style='display:none;position:fixed;inset:0;background:#0008;z-index:999;align-items:center;justify-content:center;padding:14px'>
+ <div id='tgModal' style='display:none;position:fixed;inset:0;background:#0008;z-index:1000;align-items:center;justify-content:center;padding:14px'>
    <div style='width:min(560px,100%);max-height:90vh;overflow:auto;background:#101833;border:1px solid #2a3558;border-radius:12px;padding:12px'>
      <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px'>
        <div style='font-weight:700'>Telegram 配置</div>
@@ -654,9 +655,6 @@ async function load(){
        <button onclick='testTG()'>测试通知</button>
      </div>
    </div>
- </div>
-
- </div>
  </div>`;
  setTGForm(c);
  await refreshQbStats();
