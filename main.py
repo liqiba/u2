@@ -19,7 +19,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.22'
+APP_VERSION = '2026.3.24'
 QB_TORRENT_UP_LIMIT_BYTES = 50 * 1024 * 1024  # default: 50 MB/s per torrent
 LOCAL_TZ = ZoneInfo('Asia/Shanghai')
 
@@ -437,7 +437,7 @@ def index():
 </head>
 <body>
   <div class='wrap'>
-    <div class='title'><h2>Catch Magic Web <span style='font-size:13px;color:var(--sub);font-weight:500'>v__APP_VERSION__</span></h2><div class='actions'><button class='ghost' type='button' onclick='openTGModal()'>TG配置</button><button class='ghost' type='button' onclick='toggleTheme()'>🌗 主题切换</button><div class='badge' id='runBadge'>状态读取中...</div></div></div>
+    <div class='title'><h2>Catch Magic Web <span style='font-size:13px;color:var(--sub);font-weight:500'>v__APP_VERSION__</span></h2><div class='actions'><button class='ghost' type='button' onclick='openMainConfigModal()'>基础配置</button><button class='ghost' type='button' onclick='openTGModal()'>TG配置</button><button class='ghost' type='button' onclick='toggleTheme()'>🌗 主题切换</button><div class='badge' id='runBadge'>状态读取中...</div></div></div>
     <div id='app' class='grid'>loading...</div>
   </div>
 <script>
@@ -454,6 +454,10 @@ function getTheme(){ return localStorage.getItem('cm_theme')||'dark'; }
 function applyTheme(){ const t=getTheme(); document.body.classList.toggle('theme-light', t==='light'); }
 function toggleTheme(){ localStorage.setItem('cm_theme', getTheme()==='light'?'dark':'light'); applyTheme(); }
 
+
+
+function openMainConfigModal(){ const m=document.getElementById('mainCfgModal'); if(m) m.style.display='flex'; }
+function closeMainConfigModal(){ const m=document.getElementById('mainCfgModal'); if(m) m.style.display='none'; }
 
 function openTGModal(){
   const m=document.getElementById('tgModal');
@@ -599,6 +603,15 @@ async function load(){
    </div>
    <div id='qbModules' class='modules'><div class='tip'>加载中...</div></div>
  </div>
+
+ <div class='card'><div class='actions'><button onclick='openMainConfigModal()'>打开基础配置</button></div><div class='tip' style='margin-top:8px'>基础配置改为弹窗模式，点击按钮进行编辑。</div></div>
+
+ <div id='mainCfgModal' style='display:none;position:fixed;inset:0;background:#0008;z-index:1000;align-items:center;justify-content:center;padding:14px'>
+   <div style='width:min(920px,100%);max-height:90vh;overflow:auto;background:#101833;border:1px solid #2a3558;border-radius:12px;padding:12px'>
+     <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px'>
+       <div style='font-weight:700;color:var(--text)'>基础配置</div>
+       <button class='ghost' onclick='closeMainConfigModal()'>关闭</button>
+     </div>
  <div class='card'><div class='form'>
    <div class='full switch'><input id='enabled' type='checkbox' ${c.enabled?'checked':''}><label for='enabled' style='margin:0;color:var(--text)'>启用定时任务</label></div>
    <div><label>执行间隔（秒）</label><input id='interval' type='number' min='10' value='${c.interval}'></div>
@@ -610,8 +623,11 @@ async function load(){
    <div><label>qB 分发模式</label><select id='qb_mode'><option value='round_robin' ${c.qb_mode==='round_robin'?'selected':''}>轮询分发</option><option value='all' ${c.qb_mode==='all'?'selected':''}>全部推送</option></select></div>
    <div><label>单种上传限速(MB/s)</label><input id='qb_up_limit_mb' type='number' min='0' value='${c.qb_up_limit_mb??50}'></div>
  </div>
- <div class='actions' style='margin-top:12px'><button onclick='save()'>保存配置</button><button onclick='runNow()'>立即执行一次</button><button onclick='testTG()'>测试TG通知</button><button class='ghost' onclick='refreshLogs()'>刷新日志</button></div>
+ <div class='actions' style='margin-top:12px'><button onclick='save()'>保存配置</button><button onclick='runNow()'>立即执行一次</button><button class='ghost' onclick='refreshLogs()'>刷新日志</button></div>
  <div class='tip' style='margin-top:10px'>点击模块上的“配置”按钮才会弹出配置窗口。</div>
+ </div>
+
+   </div>
  </div>
  <div class='card'><div class='k' style='margin-bottom:8px'>最近日志（最多 200 行）</div><pre id='logs'>loading logs...</pre></div>
 
