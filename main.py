@@ -19,7 +19,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.13'
+APP_VERSION = '2026.3.15'
 QB_TORRENT_UP_LIMIT_BYTES = 50 * 1024 * 1024  # default: 50 MB/s per torrent
 LOCAL_TZ = ZoneInfo('Asia/Shanghai')
 
@@ -78,7 +78,7 @@ def tg_notify(cfg: dict, text: str):
             timeout=15,
         )
     except Exception as e:
-        log(f'TG通知发送失败 (TG notify failed): {e}')
+        log(f'TG通知发送失败：{e}')
 
 
 def load_json(path: Path, default):
@@ -209,11 +209,11 @@ class Runner:
         self._stop = False
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
-        log('调度器已启动 (scheduler started)')
+        log('调度器已启动')
 
     def stop(self):
         self._stop = True
-        log('调度器停止中 (scheduler stopping)')
+        log('调度器停止中')
 
     def _loop(self):
         while not self._stop:
@@ -239,7 +239,7 @@ class Runner:
                 state['last_run'] = now_iso()
                 state['last_error'] = 'u2_api_token 为空，跳过执行'
                 save_json(STATE_PATH, state)
-                log('执行跳过：u2_api_token 为空 (run skipped: empty u2_api_token)')
+                log('执行跳过：u2_api_token 为空')
                 return
 
             url = f"{cfg.get('u2_api_base').rstrip('/')}/promotions"
@@ -279,12 +279,12 @@ class Runner:
                 tid = p.get('torrent_id')
                 dr = p.get('download_ratio')
                 seeders = p.get('seeders', '?')
-                log(f'发现新优惠 (new promotion): id={pid}, tid={tid}, dr={dr}, seeders={seeders}')
+                log(f'检测到新的推广：ID={pid}，线程号={tid}，dr={dr}，种子用户={seeders}')
                 if cfg.get('tg_notify_new', True):
                     tg_notify(cfg, f'🆕 U2新优惠\nID: {pid}\nTID: {tid}\nDR: {dr}\nSeeders: {seeders}')
 
                 if not tid:
-                    log(f'跳过推送到 qB：优惠缺少 tid (skip push to qB: missing tid), promotion={pid}')
+                    log(f'跳过推送到 qB：推广号={pid} 缺少线程号')
                     continue
                 if not passkey:
                     log('跳过推送到 qB：u2_passkey 未配置 (skip push to qB: u2_passkey missing)')
@@ -300,21 +300,21 @@ class Runner:
                     cname = cli.get('name') or cli.get('qb_url') or 'unknown'
                     ok, msg = qb_add_torrent(cli, torrent_url, up_limit_bytes)
                     if ok:
-                        log(f'已推送到 qB[{cname}] (pushed): promotion={pid}, tid={tid}, upLimit={up_limit_bytes}B/s')
+                        log(f'已推送至 qB[{cname}]：推广号={pid}，线程号={tid}，上传限制={up_limit_bytes}B/s')
                     else:
-                        log(f'推送到 qB[{cname}] 失败 (push failed): promotion={pid}, tid={tid}, err={msg}')
+                        log(f'推送到 qB[{cname}] 失败：推广号={pid}，线程号={tid}，原因={msg}')
 
             state['last_seen'] = [str((p.get('promotion_id') or p.get('id'))) for p in data if (p.get('promotion_id') or p.get('id'))][:200]
             state['last_run'] = now_iso()
             state['last_error'] = None
             save_json(STATE_PATH, state)
-            log(f'执行完成 (run done): fetched={len(data)}, new={len(new_items)}')
+            log(f'运行完成：已获取={len(data)}，新增={len(new_items)}')
         except Exception as e:
             state = load_json(STATE_PATH, {'last_seen': [], 'last_run': None, 'last_error': None, 'qb_rr_index': 0})
             state['last_run'] = now_iso()
             state['last_error'] = str(e)
             save_json(STATE_PATH, state)
-            log(f'执行失败 (run failed): {e}')
+            log(f'运行失败：{e}')
             if cfg.get('tg_notify_error', True):
                 tg_notify(cfg, f'❌ U2任务执行失败\n{e}')
         finally:
@@ -649,7 +649,7 @@ def put_config(cfg: ConfigIn):
     if not data.get('qb_clients'):
         data['qb_clients'] = []
     save_json(CONFIG_PATH, data)
-    log('配置已更新 (config updated)')
+    log('配置已更新')
     return {'ok': True}
 
 
