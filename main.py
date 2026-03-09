@@ -19,7 +19,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.32'
+APP_VERSION = '2026.3.34'
 QB_TORRENT_UP_LIMIT_BYTES = 50 * 1024 * 1024  # default: 50 MB/s per torrent
 LOCAL_TZ = ZoneInfo('Asia/Shanghai')
 
@@ -495,7 +495,7 @@ def index():
 </head>
 <body>
   <div class='wrap'>
-    <div class='title'><h2>Catch Magic Web <span style='font-size:13px;color:var(--sub);font-weight:500'>v__APP_VERSION__</span></h2><div class='actions'><button class='ghost' type='button' onclick='openMainConfigModal()'>基础配置</button><button class='ghost' type='button' onclick='openTGModal()'>TG配置</button><button class='ghost' type='button' onclick='toggleTheme()'>🌗 主题切换</button><div class='badge' id='runBadge'>状态读取中...</div></div></div>
+    <div class='title'><h2>Catch Magic Web <span style='font-size:13px;color:var(--sub);font-weight:500'>v__APP_VERSION__</span></h2><div class='actions'><button class='ghost' type='button' onclick='openMainConfigModal()'>基础配置</button><button class='ghost' type='button' onclick='openTGModal()'>TG配置</button><button class='ghost' type='button' onclick='retryFailedPushes()'>重推失败任务</button><button class='ghost' type='button' onclick='toggleTheme()'>🌗 主题切换</button><div class='badge' id='runBadge'>状态读取中...</div></div></div>
     <div id='app' class='grid'>loading...</div>
   </div>
 <script>
@@ -507,7 +507,7 @@ async function j(u,o){const r=await fetch(u,o);return await r.json()}
 function esc(t){return (t??'').toString().replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
 function fmtBytes(n){ n=Number(n||0); const u=['B','KB','MB','GB','TB']; let i=0; while(n>=1024&&i<u.length-1){n/=1024;i++;} return `${n.toFixed(i<=1?0:2)} ${u[i]}`; }
 function fmtSpeed(n){ return `${fmtBytes(n)}/s`; }
-function statusBadge(s){ if(s.running) return `<span class='dot warn'></span>执行中`; if(s.last_error) return `<span class='dot err'></span>异常`; return `<span class='dot ok'></span>正常`; }
+function statusBadge(s, enabled){ if(!enabled) return `<span class='dot warn'></span>已暂停`; if(s.running) return `<span class='dot warn'></span>执行中`; if(s.last_error) return `<span class='dot err'></span>异常`; return `<span class='dot ok'></span>正常`; }
 function getTheme(){ return localStorage.getItem('cm_theme')||'dark'; }
 function applyTheme(){ const t=getTheme(); document.body.classList.toggle('theme-light', t==='light'); }
 function toggleTheme(){ localStorage.setItem('cm_theme', getTheme()==='light'?'dark':'light'); applyTheme(); }
@@ -647,12 +647,12 @@ async function refreshQbStats(){
 async function load(){
  applyTheme();
  const c=await j('/api/config'); const s=await j('/api/status'); qbClients = JSON.parse(JSON.stringify(c.qb_clients || []));
- document.getElementById('runBadge').innerHTML=statusBadge(s);
+ document.getElementById('runBadge').innerHTML=statusBadge(s, c.enabled);
  document.getElementById('app').innerHTML=`
  <div class='card'><div class='status'>
    <div><div class='k'>最后执行</div><div class='v'>${esc(s.last_run||'-')}</div></div>
    <div><div class='k'>运行状态</div><div class='v'>${s.running?'执行中':'空闲'}</div></div>
-   <div><div class='k'>最近报错</div><div class='v'>${esc(s.last_error_cn||'无')}</div></div>
+   <div><div class='k'>最近报错</div><div class='v'>${c.enabled ? esc(s.last_error_cn||'无') : '已暂停（未运行）'}</div></div>
  </div></div>
  <div class='card'>
    <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px'>
@@ -681,7 +681,7 @@ async function load(){
    <div><label>qB 分发模式</label><select id='qb_mode'><option value='round_robin' ${c.qb_mode==='round_robin'?'selected':''}>轮询分发</option><option value='all' ${c.qb_mode==='all'?'selected':''}>全部推送</option></select></div>
    <div><label>单种上传限速(MB/s)</label><input id='qb_up_limit_mb' type='number' min='0' value='${c.qb_up_limit_mb??50}'></div>
  </div>
- <div class='actions' style='margin-top:12px'><button onclick='save()'>保存配置</button><button onclick='runNow()'>立即执行一次</button><button onclick='retryFailedPushes()'>重推失败任务</button><button class='ghost' onclick='refreshLogs()'>刷新日志</button></div>
+ <div class='actions' style='margin-top:12px'><button onclick='save()'>保存配置</button><button onclick='runNow()'>立即执行一次</button><button class='ghost' onclick='refreshLogs()'>刷新日志</button></div>
  <div class='tip' style='margin-top:10px'>点击模块上的“配置”按钮才会弹出配置窗口。</div>
  </div>
 
