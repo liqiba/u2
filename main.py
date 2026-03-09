@@ -19,7 +19,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.48'
+APP_VERSION = '2026.3.50'
 QB_TORRENT_UP_LIMIT_BYTES = 50 * 1024 * 1024  # default: 50 MB/s per torrent
 LOCAL_TZ = ZoneInfo('Asia/Shanghai')
 
@@ -655,8 +655,8 @@ def index():
     .ok{background:var(--ok)} .err{background:var(--err)} .warn{background:var(--warn)} label{font-size:12px;color:var(--sub);display:block;margin-bottom:6px}
     input,select{width:100%;max-width:100%;background:#0e1528;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:10px}\n    body.theme-light input,body.theme-light select{background:#ffffff;color:#12203f;border-color:#b8c8f5}\n    body.theme-light input::placeholder,body.theme-light select::placeholder{color:#6b7fae;opacity:1}
     input:focus,select:focus{outline:none;border-color:var(--pri)} .switch{display:flex;align-items:center;gap:10px}.switch input{width:auto}
-    .actions{display:flex;gap:10px;flex-wrap:wrap} button{border:0;border-radius:10px;padding:10px 14px;color:white;background:var(--pri);cursor:pointer;font-weight:600}
-    button:hover{background:var(--pri2)} button.ghost{background:transparent;border:1px solid var(--line);color:var(--text)} button.danger{background:#b4232a}
+    .actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center} .title .actions{justify-content:flex-end} button{border:0;border-radius:10px;padding:10px 14px;color:white;background:var(--pri);cursor:pointer;font-weight:600}
+    button:hover{background:var(--pri2)} button.ghost{background:transparent;border:1px solid var(--line);color:var(--text)} .actions .compact{padding:8px 10px;font-size:12px;line-height:1.1;flex:0 0 auto} button.danger{background:#b4232a}
     pre{margin:0;background:#0a0f1f;color:#c7d2ff;border:1px solid var(--line);border-radius:10px;padding:12px;max-height:360px;overflow:auto;line-height:1.45}
     .tip{font-size:12px;color:var(--sub)} .qb-item{border:1px dashed var(--line);border-radius:12px;padding:10px;margin-top:10px}
     .modules{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
@@ -687,7 +687,7 @@ def index():
 </head>
 <body>
   <div class='wrap'>
-    <div class='title'><h2>Catch Magic Web <span style='font-size:13px;color:var(--sub);font-weight:500'>v__APP_VERSION__</span></h2><div class='actions'><button class='ghost' type='button' onclick='openMainConfigModal()'>基础配置</button><button class='ghost' type='button' onclick='openTGModal()'>TG配置</button><button class='ghost' type='button' class='ghost compact' type='button' onclick='openMagicCfgModal()'>魔法配置</button><button class='ghost' type='button' class='ghost compact' type='button' onclick='runSelfMagicOnce()'>手动魔法</button><button class='ghost' type='button' class='ghost compact' type='button' onclick='retryFailedPushes()'>失败重推</button><button class='ghost' type='button' onclick='toggleTheme()'>🌗 主题切换</button><div class='badge' id='runBadge'>状态读取中...</div></div></div>
+    <div class='title'><h2>Catch Magic Web <span style='font-size:13px;color:var(--sub);font-weight:500'>v__APP_VERSION__</span></h2><div class='actions'><button class='ghost' type='button' onclick='openMainConfigModal()'>基础配置</button><button class='ghost' type='button' onclick='openTGModal()'>TG配置</button><button class='ghost compact' type='button' onclick='openMagicCfgModal()'>魔法配置</button><button class='ghost compact' type='button' onclick='runSelfMagicOnce()'>手动魔法</button><button class='ghost compact' type='button' onclick='retryFailedPushes()'>失败重推</button><button class='ghost' type='button' onclick='toggleTheme()'>🌗 主题切换</button><div class='badge' id='runBadge'>状态读取中...</div></div></div>
     <div id='app' class='grid'>loading...</div>
   </div>
 <script>
