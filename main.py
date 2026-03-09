@@ -19,7 +19,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.36'
+APP_VERSION = '2026.3.38'
 QB_TORRENT_UP_LIMIT_BYTES = 50 * 1024 * 1024  # default: 50 MB/s per torrent
 LOCAL_TZ = ZoneInfo('Asia/Shanghai')
 
@@ -33,6 +33,7 @@ DEFAULT_CONFIG = {
     'limit': 20,
     'max_seeders': 5,
     'download_non_free': False,
+    'require_2x_free': True,
     'qb_up_limit_mb': 50,
     'qb_mode': 'round_robin',
     'tg_enabled': False,
@@ -318,6 +319,16 @@ class Runner:
                 pid = p.get('promotion_id') or p.get('id')
                 tid = p.get('torrent_id')
                 dr = p.get('download_ratio')
+                ur = p.get('upload_ratio')
+                ratio_txt = str(p.get('ratio') or '').strip()
+                if ratio_txt and '/' in ratio_txt:
+                    try:
+                        left, right = [x.strip() for x in ratio_txt.split('/', 1)]
+                        ur = float(left)
+                        dr = float(right)
+                    except Exception:
+                        pass
+
                 seeders_raw = p.get('seeders')
                 try:
                     seeders = int(seeders_raw) if seeders_raw not in (None, '', '?') else 0
@@ -325,8 +336,20 @@ class Runner:
                     seeders = 0
 
                 is_free = str(dr) in ('0', '0.0') or dr in (0, 0.0)
-                if (not cfg.get('download_non_free', False)) and (not is_free):
-                    log(f'跳过非Free推广：ID={pid}，dr={dr}')
+                is_2x = False
+                try:
+                    is_2x = float(ur) >= 2.0
+                except Exception:
+                    is_2x = False
+
+                if cfg.get('require_2x_free', True):
+                    if not (is_free and is_2x):
+                        ratio_disp = ratio_txt if ratio_txt else (str(ur) + ' / ' + str(dr))
+                        log(f'跳过非2XFree推广：ID={pid}，比例={ratio_disp}')
+                        continue
+                elif (not cfg.get('download_non_free', False)) and (not is_free):
+                    ratio_disp = ratio_txt if ratio_txt else (str(ur) + ' / ' + str(dr))
+                    log(f'跳过非Free推广：ID={pid}，比例={ratio_disp}')
                     continue
 
                 max_seeders = int(cfg.get('max_seeders', 5) or 0)
@@ -335,7 +358,8 @@ class Runner:
                     continue
 
                 extra = f'，做种人数={seeders}' if seeders_raw not in (None, '', '?') else ''
-                log(f'检测到新的推广：ID={pid}，线程号={tid}，dr={dr}{extra}')
+                ratio_disp = ratio_txt if ratio_txt else (str(ur) + ' / ' + str(dr))
+                log(f'检测到新的推广：ID={pid}，线程号={tid}，比例={ratio_disp}{extra}')
                 if cfg.get('tg_notify_new', True):
                     ok_tg, msg_tg = tg_notify(cfg, f'🆕 U2新优惠\nID: {pid}\nTID: {tid}\nDR: {dr}')
                     if not ok_tg:
@@ -431,6 +455,7 @@ class ConfigIn(BaseModel):
     limit: int
     max_seeders: int
     download_non_free: bool
+    require_2x_free: bool = True
     qb_up_limit_mb: int = 50
     qb_mode: str = 'round_robin'
     tg_enabled: bool = False
@@ -696,6 +721,7 @@ async function load(){
    <div><label>魔法范围（scope）</label><select id='scope'><option value='public' ${c.scope==='public'?'selected':''}>公共魔法（public）</option><option value='all' ${c.scope==='all'?'selected':''}>全部魔法（all）</option><option value='private' ${c.scope==='private'?'selected':''}>私人魔法（private）</option><option value='global' ${c.scope==='global'?'selected':''}>全局魔法（global）</option></select></div>
    <div><label>qB 分发模式</label><select id='qb_mode'><option value='round_robin' ${c.qb_mode==='round_robin'?'selected':''}>轮询分发</option><option value='all' ${c.qb_mode==='all'?'selected':''}>全部推送</option></select></div>
    <div><label>单种上传限速(MB/s)</label><input id='qb_up_limit_mb' type='number' min='0' value='${c.qb_up_limit_mb??50}'></div>
+   <div class='switch'><input id='require_2x_free' type='checkbox' ${c.require_2x_free!==false?'checked':''}><label for='require_2x_free' style='margin:0;color:var(--text)'>仅抓取 2XFree</label></div>
  </div>
  <div class='actions' style='margin-top:12px'><button onclick='save()'>保存配置</button><button onclick='runNow()'>立即执行一次</button><button class='ghost' onclick='refreshLogs()'>刷新日志</button></div>
  <div class='tip' style='margin-top:10px'>点击模块上的“配置”按钮才会弹出配置窗口。</div>
@@ -765,6 +791,7 @@ async function save(){
   download_non_free:false,
   qb_mode:document.getElementById('qb_mode').value,
   qb_up_limit_mb:parseInt(document.getElementById('qb_up_limit_mb').value||'50'),
+  require_2x_free:document.getElementById('require_2x_free')?.checked!==false,
   qb_clients:qbClients,
   ...collectTG(),
  };
