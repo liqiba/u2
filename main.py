@@ -19,7 +19,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.38'
+APP_VERSION = '2026.3.40'
 QB_TORRENT_UP_LIMIT_BYTES = 50 * 1024 * 1024  # default: 50 MB/s per torrent
 LOCAL_TZ = ZoneInfo('Asia/Shanghai')
 
@@ -34,6 +34,12 @@ DEFAULT_CONFIG = {
     'max_seeders': 5,
     'download_non_free': False,
     'require_2x_free': True,
+    'auto_self_magic_enabled': False,
+    'auto_self_magic_min_upload_kib': 1024,
+    'auto_self_magic_min_size_gb': 5,
+    'auto_self_magic_hours': 24,
+    'u2_uid': 0,
+    'u2_cookie': '',
     'qb_up_limit_mb': 50,
     'qb_mode': 'round_robin',
     'tg_enabled': False,
@@ -237,6 +243,124 @@ def summarize_error_cn(err: str):
     return '运行失败：请查看详细日志'
 
 
+
+def qb_list_active_torrents(client: dict):
+    sess, qb_url, err = qb_login(client)
+    if err:
+        return [], err
+    try:
+        r = sess.get(f'{qb_url}/api/v2/torrents/info', params={'filter':'active'}, timeout=20)
+        r.raise_for_status()
+        arr = r.json()
+        if not isinstance(arr, list):
+            return [], 'qB返回格式异常'
+        return arr, None
+    except Exception as e:
+        return [], str(e)
+
+
+def u2_tid_by_hash(cfg: dict, _hash: str):
+    token = (cfg.get('u2_api_token') or '').strip()
+    uid = int(cfg.get('u2_uid') or 0)
+    if not token or not uid:
+        return None, '缺少u2_api_token或u2_uid'
+    try:
+        r = requests.get('https://u2.kysdm.com/api/v1/history', params={'uid': uid, 'token': token, 'hash': _hash}, timeout=20)
+        r.raise_for_status()
+        d = r.json().get('data', {}).get('history', [])
+        if d:
+            return d[0].get('torrent_id'), None
+        return None, '未查到对应种子ID'
+    except Exception as e:
+        return None, str(e)
+
+
+def u2_send_self_magic(cfg: dict, tid: int):
+    cookie = (cfg.get('u2_cookie') or '').strip()
+    hours = int(cfg.get('auto_self_magic_hours') or 24)
+    if not cookie:
+        return False, '缺少u2_cookie'
+    data = {
+        'action': 'magic', 'divergence': '', 'base_everyone': '', 'base_self': '', 'base_other': '',
+        'torrent': tid, 'tsize': '', 'ttl': '', 'user_other': '', 'start': 0, 'promotion': 8,
+        'comment': '', 'user': 'SELF', 'hours': hours, 'ur': 2.33, 'dr': 1,
+    }
+    ck = {'nexusphp_u2': cookie}
+    try:
+        t = requests.post('https://u2.dmhy.org/promotion.php?test=1', data=data, cookies=ck, timeout=20)
+        if t.status_code >= 300:
+            return False, f'测试失败:{t.status_code}'
+        r = requests.post('https://u2.dmhy.org/promotion.php', data=data, cookies=ck, timeout=20)
+        txt = r.text or ''
+        if r.status_code < 300 and ('<script' in txt or 'location.href' in txt):
+            return True, 'ok'
+        return False, f'提交失败:{r.status_code}'
+    except Exception as e:
+        return False, str(e)
+
+
+def auto_self_magic_once(cfg: dict, state: dict):
+    if not cfg.get('auto_self_magic_enabled'):
+        return {'ok': True, 'done': 0, 'msg': '未启用'}
+
+    min_up = int(cfg.get('auto_self_magic_min_upload_kib') or 1024) * 1024
+    min_size = int(cfg.get('auto_self_magic_min_size_gb') or 5) * 1024 * 1024 * 1024
+
+    candidates = []
+    clients = [c for c in (cfg.get('qb_clients') or []) if c.get('enabled', True)]
+    healthy, bad = healthy_qb_clients(clients)
+    if bad:
+        log(f'自放魔法：以下qB不可用，已跳过：{",".join(bad)}')
+    for cli in healthy:
+        arr, err = qb_list_active_torrents(cli)
+        if err:
+            log(f'自放魔法：读取qB活动种子失败：{err}')
+            continue
+        for t in arr:
+            tr = str(t.get('tracker') or '')
+            if ('daydream.dmhy.best' not in tr) and ('tracker.dmhy.org' not in tr):
+                continue
+            up = int(t.get('upspeed') or 0)
+            size = int(t.get('size') or 0)
+            prog = float(t.get('progress') or 0)
+            if up < min_up:
+                continue
+            if size < min_size:
+                continue
+            if prog < 1.0:
+                continue
+            candidates.append({'hash': (t.get('hash') or '').lower(), 'up': up, 'size': size})
+
+    if not candidates:
+        log('自放魔法：没有符合条件的活跃做种')
+        return {'ok': True, 'done': 0, 'msg': '无候选种子'}
+
+    recent = dict(state.get('self_magic_recent') or {})
+    now = int(time.time())
+    done = 0
+    for t in candidates[:20]:
+        h = t['hash']
+        if not h:
+            continue
+        ts = int(recent.get(h) or 0)
+        if now - ts < 20 * 3600:
+            continue
+        tid, err = u2_tid_by_hash(cfg, h)
+        if err or not tid:
+            log(f'自放魔法：hash={h[:8]} 查tid失败：{err}')
+            continue
+        ok, msg = u2_send_self_magic(cfg, int(tid))
+        if ok:
+            recent[h] = now
+            done += 1
+            log(f'自放魔法成功：tid={tid}，hash={h[:8]}')
+        else:
+            log(f'自放魔法失败：tid={tid}，原因={msg}')
+
+    state['self_magic_recent'] = recent
+    return {'ok': True, 'done': done, 'msg': f'处理{len(candidates)}，成功{done}'}
+
+
 class Runner:
     def __init__(self):
         self._lock = threading.Lock()
@@ -410,6 +534,9 @@ class Runner:
                             'time': now_iso(),
                         })
 
+            # 自放魔法（可选）
+            auto_self_magic_once(cfg, state)
+
             state['last_seen'] = [str((p.get('promotion_id') or p.get('id'))) for p in data if (p.get('promotion_id') or p.get('id'))][:200]
             state['last_run'] = now_iso()
             state['last_error'] = None
@@ -456,6 +583,12 @@ class ConfigIn(BaseModel):
     max_seeders: int
     download_non_free: bool
     require_2x_free: bool = True
+    auto_self_magic_enabled: bool = False
+    auto_self_magic_min_upload_kib: int = 1024
+    auto_self_magic_min_size_gb: int = 5
+    auto_self_magic_hours: int = 24
+    u2_uid: int = 0
+    u2_cookie: str = ''
     qb_up_limit_mb: int = 50
     qb_mode: str = 'round_robin'
     tg_enabled: bool = False
@@ -535,7 +668,7 @@ def index():
 </head>
 <body>
   <div class='wrap'>
-    <div class='title'><h2>Catch Magic Web <span style='font-size:13px;color:var(--sub);font-weight:500'>v__APP_VERSION__</span></h2><div class='actions'><button class='ghost' type='button' onclick='openMainConfigModal()'>基础配置</button><button class='ghost' type='button' onclick='openTGModal()'>TG配置</button><button class='ghost' type='button' onclick='retryFailedPushes()'>重推失败任务</button><button class='ghost' type='button' onclick='toggleTheme()'>🌗 主题切换</button><div class='badge' id='runBadge'>状态读取中...</div></div></div>
+    <div class='title'><h2>Catch Magic Web <span style='font-size:13px;color:var(--sub);font-weight:500'>v__APP_VERSION__</span></h2><div class='actions'><button class='ghost' type='button' onclick='openMainConfigModal()'>基础配置</button><button class='ghost' type='button' onclick='openTGModal()'>TG配置</button><button class='ghost' type='button' onclick='runSelfMagicOnce()'>手动自放魔法</button><button class='ghost' type='button' onclick='retryFailedPushes()'>重推失败任务</button><button class='ghost' type='button' onclick='toggleTheme()'>🌗 主题切换</button><div class='badge' id='runBadge'>状态读取中...</div></div></div>
     <div id='app' class='grid'>loading...</div>
   </div>
 <script>
@@ -715,6 +848,12 @@ async function load(){
    <div><label>执行间隔（秒）</label><input id='interval' type='number' min='10' value='${c.interval}'></div>
    <div><label>抓取条数（limit）</label><input id='limit' type='number' min='1' max='60' value='${c.limit}'></div>
    <div><label>最大做种人数</label><input id='max_seeders' type='number' min='0' value='${c.max_seeders??5}'></div>
+   <div class='switch'><input id='auto_self_magic_enabled' type='checkbox' ${c.auto_self_magic_enabled?'checked':''}><label for='auto_self_magic_enabled' style='margin:0;color:var(--text)'>自动给自己放2.33x魔法</label></div>
+   <div><label>自放最小上传(KiB/s)</label><input id='auto_self_magic_min_upload_kib' type='number' min='1' value='${c.auto_self_magic_min_upload_kib??1024}'></div>
+   <div><label>自放最小体积(GB)</label><input id='auto_self_magic_min_size_gb' type='number' min='1' value='${c.auto_self_magic_min_size_gb??5}'></div>
+   <div><label>自放魔法时长(小时)</label><input id='auto_self_magic_hours' type='number' min='1' max='360' value='${c.auto_self_magic_hours??24}'></div>
+   <div><label>U2 UID</label><input id='u2_uid' type='number' min='0' value='${c.u2_uid??0}'></div>
+   <div class='full'><label>U2 Cookie(nexusphp_u2)</label><input id='u2_cookie' type='password' autocomplete='new-password' value='${esc(c.u2_cookie||'')}'></div>
    <div class='full'><label>U2 API Base</label><input id='u2_api_base' value='${esc(c.u2_api_base)}'></div>
    <div class='full'><label>U2 API Token</label><input id='u2_api_token' name='u2_api_token_input' type='password' autocomplete='new-password' autocapitalize='off' autocorrect='off' spellcheck='false' value='${esc(c.u2_api_token||'')}'></div>
    <div class='full'><label>U2 Passkey</label><input id='u2_passkey' name='u2_passkey_input' type='password' autocomplete='new-password' autocapitalize='off' autocorrect='off' spellcheck='false' value='${esc(c.u2_passkey||'')}'></div>
@@ -792,6 +931,12 @@ async function save(){
   qb_mode:document.getElementById('qb_mode').value,
   qb_up_limit_mb:parseInt(document.getElementById('qb_up_limit_mb').value||'50'),
   require_2x_free:document.getElementById('require_2x_free')?.checked!==false,
+  auto_self_magic_enabled:document.getElementById('auto_self_magic_enabled')?.checked||false,
+  auto_self_magic_min_upload_kib:parseInt(document.getElementById('auto_self_magic_min_upload_kib')?.value||'1024'),
+  auto_self_magic_min_size_gb:parseInt(document.getElementById('auto_self_magic_min_size_gb')?.value||'5'),
+  auto_self_magic_hours:parseInt(document.getElementById('auto_self_magic_hours')?.value||'24'),
+  u2_uid:parseInt(document.getElementById('u2_uid')?.value||'0'),
+  u2_cookie:(document.getElementById('u2_cookie')?.value||'').trim(),
   qb_clients:qbClients,
   ...collectTG(),
  };
@@ -801,6 +946,7 @@ async function save(){
 async function testTG(){ const r=await fetch('/api/tg/test',{method:'POST'}); const d=await r.json(); alert(d.ok?('测试通知已发送：'+(d.message||'')):('测试通知失败：'+(d.error||'unknown'))); }
 async function runNow(){ await fetch('/api/run',{method:'POST'}); setTimeout(load, 900); }
 async function retryFailedPushes(){ const r=await fetch('/api/retry_failed',{method:'POST'}); const d=await r.json(); if(!d.ok){ alert('重推失败：'+(d.error||'未知错误')); return;} alert(`重推完成：共${d.retried||0}条，成功${d.success||0}条，剩余${d.remain||0}条`); setTimeout(load,500); }
+async function runSelfMagicOnce(){ const r=await fetch('/api/self_magic/once',{method:'POST'}); const d=await r.json(); if(!d.ok){ alert('手动自放失败：'+(d.error||'未知错误')); return;} alert(`手动自放完成：${d.msg||('成功'+(d.done||0)+'条')}`); setTimeout(load,500); }
 async function refreshLogs(){ const t=await fetch('/api/logs').then(r=>r.text()); const node=document.getElementById('logs'); if(node) node.textContent=t||'(暂无日志)'; }
 load();
 </script>
@@ -899,6 +1045,14 @@ def retry_failed():
     state['failed_pushes'] = remain[-200:]
     save_json(STATE_PATH, state)
     return {'ok': True, 'retried': len(failed), 'success': success, 'remain': len(remain)}
+
+@app.post('/api/self_magic/once')
+def self_magic_once():
+    cfg = load_config()
+    st = load_json(STATE_PATH, {'last_seen': [], 'last_run': None, 'last_error': None, 'qb_rr_index': 0, 'failed_pushes': []})
+    res = auto_self_magic_once(cfg, st)
+    save_json(STATE_PATH, st)
+    return res
 
 @app.get('/api/logs', response_class=PlainTextResponse)
 def logs():
