@@ -19,7 +19,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.30'
+APP_VERSION = '2026.3.32'
 QB_TORRENT_UP_LIMIT_BYTES = 50 * 1024 * 1024  # default: 50 MB/s per torrent
 LOCAL_TZ = ZoneInfo('Asia/Shanghai')
 
@@ -203,6 +203,39 @@ def pick_qb_clients(cfg: dict, state: dict):
     return [picked]
 
 
+def healthy_qb_clients(clients: list):
+    ok_clients = []
+    bad_names = []
+    for c in clients:
+        st = qb_fetch_stats(c)
+        if st.get('ok'):
+            ok_clients.append(c)
+        else:
+            bad_names.append(c.get('name') or c.get('qb_url') or 'unknown')
+    return ok_clients, bad_names
+
+
+def add_failed_push(state: dict, item: dict):
+    arr = list(state.get('failed_pushes') or [])
+    arr.append(item)
+    state['failed_pushes'] = arr[-200:]
+
+
+def summarize_error_cn(err: str):
+    t = (err or '').lower()
+    if '401' in t or 'unauthorized' in t or 'invalid token' in t:
+        return '鉴权失败：U2 Token 无效或已过期'
+    if 'timeout' in t or 'timed out' in t:
+        return '请求超时：请检查网络或稍后重试'
+    if 'name or service not known' in t or 'temporary failure in name resolution' in t:
+        return '域名解析失败：请检查网络/DNS'
+    if 'connection refused' in t:
+        return '连接被拒绝：目标服务未启动或端口不可达'
+    if 'u2_api_token 为空' in t:
+        return '未配置 U2 Token'
+    return '运行失败：请查看详细日志'
+
+
 class Runner:
     def __init__(self):
         self._lock = threading.Lock()
@@ -239,7 +272,7 @@ class Runner:
         self._running = True
         try:
             cfg = load_config()
-            state = load_json(STATE_PATH, {'last_seen': [], 'last_run': None, 'last_error': None, 'qb_rr_index': 0})
+            state = load_json(STATE_PATH, {'last_seen': [], 'last_run': None, 'last_error': None, 'qb_rr_index': 0, 'failed_pushes': []})
 
             token = cfg.get('u2_api_token', '').strip()
             if not token:
@@ -285,10 +318,11 @@ class Runner:
                 pid = p.get('promotion_id') or p.get('id')
                 tid = p.get('torrent_id')
                 dr = p.get('download_ratio')
-                seeders = p.get('seeders', '?')
-                log(f'检测到新的推广：ID={pid}，线程号={tid}，dr={dr}，种子用户={seeders}')
+                seeders = p.get('seeders')
+                extra = f'，种子用户={seeders}' if seeders not in (None, '', '?') else ''
+                log(f'检测到新的推广：ID={pid}，线程号={tid}，dr={dr}{extra}')
                 if cfg.get('tg_notify_new', True):
-                    ok_tg, msg_tg = tg_notify(cfg, f'🆕 U2新优惠\nID: {pid}\nTID: {tid}\nDR: {dr}\nSeeders: {seeders}')
+                    ok_tg, msg_tg = tg_notify(cfg, f'🆕 U2新优惠\nID: {pid}\nTID: {tid}\nDR: {dr}')
                     if not ok_tg:
                         log(f'TG通知未发送：{msg_tg}')
 
@@ -296,22 +330,46 @@ class Runner:
                     log(f'跳过推送到 qB：推广号={pid} 缺少线程号')
                     continue
                 if not passkey:
-                    log('跳过推送到 qB：u2_passkey 未配置 (skip push to qB: u2_passkey missing)')
+                    log('跳过推送到 qB：u2_passkey 未配置')
                     continue
 
                 targets = pick_qb_clients(cfg, state)
                 if not targets:
-                    log('跳过推送到 qB：没有启用的客户端 (skip push to qB: no enabled clients)')
+                    log('跳过推送到 qB：没有启用的客户端')
+                    continue
+
+                healthy, bad = healthy_qb_clients(targets)
+                if bad:
+                    log(f'以下 qB 不可用，已跳过：{",".join(bad)}')
+                if not healthy:
+                    log('本次无可用 qB 客户端，推送已跳过')
                     continue
 
                 torrent_url = f'https://u2.dmhy.org/download.php?id={tid}&passkey={passkey}&https=1'
-                for cli in targets:
+                for cli in healthy:
                     cname = cli.get('name') or cli.get('qb_url') or 'unknown'
-                    ok, msg = qb_add_torrent(cli, torrent_url, up_limit_bytes)
+                    ok, msg = False, '未知错误'
+                    for attempt in range(1, 4):
+                        ok, msg = qb_add_torrent(cli, torrent_url, up_limit_bytes)
+                        if ok:
+                            if attempt > 1:
+                                log(f'已重试成功：qB[{cname}]，第{attempt}次')
+                            break
+                        if attempt < 3:
+                            log(f'qB[{cname}] 推送失败，第{attempt}次重试中：{msg}')
+                            time.sleep(attempt)
                     if ok:
                         log(f'已推送至 qB[{cname}]：推广号={pid}，线程号={tid}，上传限制={up_limit_bytes}B/s')
                     else:
                         log(f'推送到 qB[{cname}] 失败：推广号={pid}，线程号={tid}，原因={msg}')
+                        add_failed_push(state, {
+                            'promotion_id': pid,
+                            'torrent_id': tid,
+                            'torrent_url': torrent_url,
+                            'up_limit_bytes': up_limit_bytes,
+                            'qb_name': cname,
+                            'time': now_iso(),
+                        })
 
             state['last_seen'] = [str((p.get('promotion_id') or p.get('id'))) for p in data if (p.get('promotion_id') or p.get('id'))][:200]
             state['last_run'] = now_iso()
@@ -319,7 +377,7 @@ class Runner:
             save_json(STATE_PATH, state)
             log(f'运行完成：已获取={len(data)}，新增={len(new_items)}')
         except Exception as e:
-            state = load_json(STATE_PATH, {'last_seen': [], 'last_run': None, 'last_error': None, 'qb_rr_index': 0})
+            state = load_json(STATE_PATH, {'last_seen': [], 'last_run': None, 'last_error': None, 'qb_rr_index': 0, 'failed_pushes': []})
             state['last_run'] = now_iso()
             state['last_error'] = str(e)
             save_json(STATE_PATH, state)
@@ -373,7 +431,7 @@ def startup_event():
     if not CONFIG_PATH.exists():
         save_json(CONFIG_PATH, DEFAULT_CONFIG)
     if not STATE_PATH.exists():
-        save_json(STATE_PATH, {'last_seen': [], 'last_run': None, 'last_error': None, 'qb_rr_index': 0})
+        save_json(STATE_PATH, {'last_seen': [], 'last_run': None, 'last_error': None, 'qb_rr_index': 0, 'failed_pushes': []})
     runner.start()
 
 
@@ -594,7 +652,7 @@ async function load(){
  <div class='card'><div class='status'>
    <div><div class='k'>最后执行</div><div class='v'>${esc(s.last_run||'-')}</div></div>
    <div><div class='k'>运行状态</div><div class='v'>${s.running?'执行中':'空闲'}</div></div>
-   <div><div class='k'>最近错误</div><div class='v'>${esc(s.last_error||'无')}</div></div>
+   <div><div class='k'>最近报错</div><div class='v'>${esc(s.last_error_cn||'无')}</div></div>
  </div></div>
  <div class='card'>
    <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px'>
@@ -623,7 +681,7 @@ async function load(){
    <div><label>qB 分发模式</label><select id='qb_mode'><option value='round_robin' ${c.qb_mode==='round_robin'?'selected':''}>轮询分发</option><option value='all' ${c.qb_mode==='all'?'selected':''}>全部推送</option></select></div>
    <div><label>单种上传限速(MB/s)</label><input id='qb_up_limit_mb' type='number' min='0' value='${c.qb_up_limit_mb??50}'></div>
  </div>
- <div class='actions' style='margin-top:12px'><button onclick='save()'>保存配置</button><button onclick='runNow()'>立即执行一次</button><button class='ghost' onclick='refreshLogs()'>刷新日志</button></div>
+ <div class='actions' style='margin-top:12px'><button onclick='save()'>保存配置</button><button onclick='runNow()'>立即执行一次</button><button onclick='retryFailedPushes()'>重推失败任务</button><button class='ghost' onclick='refreshLogs()'>刷新日志</button></div>
  <div class='tip' style='margin-top:10px'>点击模块上的“配置”按钮才会弹出配置窗口。</div>
  </div>
 
@@ -699,6 +757,7 @@ async function save(){
 }
 async function testTG(){ const r=await fetch('/api/tg/test',{method:'POST'}); const d=await r.json(); alert(d.ok?('测试通知已发送：'+(d.message||'')):('测试通知失败：'+(d.error||'unknown'))); }
 async function runNow(){ await fetch('/api/run',{method:'POST'}); setTimeout(load, 900); }
+async function retryFailedPushes(){ const r=await fetch('/api/retry_failed',{method:'POST'}); const d=await r.json(); if(!d.ok){ alert('重推失败：'+(d.error||'未知错误')); return;} alert(`重推完成：共${d.retried||0}条，成功${d.success||0}条，剩余${d.remain||0}条`); setTimeout(load,500); }
 async function refreshLogs(){ const t=await fetch('/api/logs').then(r=>r.text()); const node=document.getElementById('logs'); if(node) node.textContent=t||'(暂无日志)'; }
 load();
 </script>
@@ -730,8 +789,10 @@ def put_config(cfg: ConfigIn):
 
 @app.get('/api/status')
 def status():
-    st = load_json(STATE_PATH, {'last_seen': [], 'last_run': None, 'last_error': None, 'qb_rr_index': 0})
+    st = load_json(STATE_PATH, {'last_seen': [], 'last_run': None, 'last_error': None, 'qb_rr_index': 0, 'failed_pushes': []})
     st['running'] = runner._running
+    st['last_error_cn'] = summarize_error_cn(st.get('last_error') or '') if st.get('last_error') else ''
+    st['failed_push_count'] = len(st.get('failed_pushes') or [])
     return st
 
 
@@ -761,6 +822,40 @@ def tg_test():
         return {'ok': False, 'error': msg}
     except Exception as e:
         return {'ok': False, 'error': str(e)}
+
+
+@app.post('/api/retry_failed')
+def retry_failed():
+    cfg = load_config()
+    state = load_json(STATE_PATH, {'last_seen': [], 'last_run': None, 'last_error': None, 'qb_rr_index': 0, 'failed_pushes': []})
+    failed = list(state.get('failed_pushes') or [])
+    if not failed:
+        return {'ok': True, 'retried': 0, 'success': 0}
+
+    # 按当前启用且在线的 qB 重推
+    enabled = [c for c in (cfg.get('qb_clients') or []) if c.get('enabled', True)]
+    healthy, _ = healthy_qb_clients(enabled)
+    if not healthy:
+        return {'ok': False, 'error': '没有可用的 qB 客户端'}
+
+    remain = []
+    success = 0
+    for it in failed:
+        turl = it.get('torrent_url')
+        upl = int(it.get('up_limit_bytes') or 0)
+        ok_one = False
+        for cli in healthy:
+            ok, _ = qb_add_torrent(cli, turl, upl)
+            if ok:
+                ok_one = True
+                success += 1
+                break
+        if not ok_one:
+            remain.append(it)
+
+    state['failed_pushes'] = remain[-200:]
+    save_json(STATE_PATH, state)
+    return {'ok': True, 'retried': len(failed), 'success': success, 'remain': len(remain)}
 
 @app.get('/api/logs', response_class=PlainTextResponse)
 def logs():
