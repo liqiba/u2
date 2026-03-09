@@ -19,7 +19,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.50'
+APP_VERSION = '2026.3.52'
 QB_TORRENT_UP_LIMIT_BYTES = 50 * 1024 * 1024  # default: 50 MB/s per torrent
 LOCAL_TZ = ZoneInfo('Asia/Shanghai')
 
@@ -708,17 +708,10 @@ function toggleTheme(){ localStorage.setItem('cm_theme', getTheme()==='light'?'d
 
 
 function openMagicCfgModal(){
-  let m=document.getElementById('magicCfgModal');
-  if(!m){
-    // 某些情况下页面局部刷新后弹窗节点未挂载，主动重载一次再打开
-    load().then(()=>{
-      const mm=document.getElementById('magicCfgModal');
-      if(mm) mm.style.display='flex';
-      else alert('魔法配置弹窗加载失败，请刷新页面后重试');
-    });
-    return;
-  }
-  m.style.display='flex';
+  ['qbModal','mainCfgModal','tgModal'].forEach(id=>{const x=document.getElementById(id); if(x) x.style.display='none';});
+  const m=document.getElementById('magicCfgModal');
+  if(m) m.style.display='flex';
+  else alert('魔法配置弹窗加载失败，请刷新页面后重试');
 }
 function closeMagicCfgModal(){
   const m=document.getElementById('magicCfgModal');
@@ -749,9 +742,10 @@ function openMainConfigModal(){ const m=document.getElementById('mainCfgModal');
 function closeMainConfigModal(){ const m=document.getElementById('mainCfgModal'); if(m) m.style.display='none'; }
 
 function openTGModal(){
+  ['qbModal','mainCfgModal','magicCfgModal'].forEach(id=>{const x=document.getElementById(id); if(x) x.style.display='none';});
   const m=document.getElementById('tgModal');
-  if(!m) return;
-  m.style.display='flex';
+  if(m) m.style.display='flex';
+  else alert('TG配置弹窗加载失败，请刷新页面后重试');
 }
 function closeTGModal(){
   const m=document.getElementById('tgModal');
