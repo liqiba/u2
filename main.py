@@ -19,7 +19,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.34'
+APP_VERSION = '2026.3.36'
 QB_TORRENT_UP_LIMIT_BYTES = 50 * 1024 * 1024  # default: 50 MB/s per torrent
 LOCAL_TZ = ZoneInfo('Asia/Shanghai')
 
@@ -318,8 +318,23 @@ class Runner:
                 pid = p.get('promotion_id') or p.get('id')
                 tid = p.get('torrent_id')
                 dr = p.get('download_ratio')
-                seeders = p.get('seeders')
-                extra = f'，种子用户={seeders}' if seeders not in (None, '', '?') else ''
+                seeders_raw = p.get('seeders')
+                try:
+                    seeders = int(seeders_raw) if seeders_raw not in (None, '', '?') else 0
+                except Exception:
+                    seeders = 0
+
+                is_free = str(dr) in ('0', '0.0') or dr in (0, 0.0)
+                if (not cfg.get('download_non_free', False)) and (not is_free):
+                    log(f'跳过非Free推广：ID={pid}，dr={dr}')
+                    continue
+
+                max_seeders = int(cfg.get('max_seeders', 5) or 0)
+                if max_seeders > 0 and seeders > max_seeders:
+                    log(f'跳过推广：ID={pid}，做种人数={seeders} 超过阈值={max_seeders}')
+                    continue
+
+                extra = f'，做种人数={seeders}' if seeders_raw not in (None, '', '?') else ''
                 log(f'检测到新的推广：ID={pid}，线程号={tid}，dr={dr}{extra}')
                 if cfg.get('tg_notify_new', True):
                     ok_tg, msg_tg = tg_notify(cfg, f'🆕 U2新优惠\nID: {pid}\nTID: {tid}\nDR: {dr}')
@@ -674,6 +689,7 @@ async function load(){
    <div class='full switch'><input id='enabled' type='checkbox' ${c.enabled?'checked':''}><label for='enabled' style='margin:0;color:var(--text)'>启用定时任务</label></div>
    <div><label>执行间隔（秒）</label><input id='interval' type='number' min='10' value='${c.interval}'></div>
    <div><label>抓取条数（limit）</label><input id='limit' type='number' min='1' max='60' value='${c.limit}'></div>
+   <div><label>最大做种人数</label><input id='max_seeders' type='number' min='0' value='${c.max_seeders??5}'></div>
    <div class='full'><label>U2 API Base</label><input id='u2_api_base' value='${esc(c.u2_api_base)}'></div>
    <div class='full'><label>U2 API Token</label><input id='u2_api_token' name='u2_api_token_input' type='password' autocomplete='new-password' autocapitalize='off' autocorrect='off' spellcheck='false' value='${esc(c.u2_api_token||'')}'></div>
    <div class='full'><label>U2 Passkey</label><input id='u2_passkey' name='u2_passkey_input' type='password' autocomplete='new-password' autocapitalize='off' autocorrect='off' spellcheck='false' value='${esc(c.u2_passkey||'')}'></div>
@@ -745,7 +761,7 @@ async function save(){
   u2_passkey:document.getElementById('u2_passkey').value.trim(),
   scope:document.getElementById('scope').value,
   limit:parseInt(document.getElementById('limit').value||'20'),
-  max_seeders:5,
+  max_seeders:parseInt(document.getElementById('max_seeders')?.value||'5'),
   download_non_free:false,
   qb_mode:document.getElementById('qb_mode').value,
   qb_up_limit_mb:parseInt(document.getElementById('qb_up_limit_mb').value||'50'),
