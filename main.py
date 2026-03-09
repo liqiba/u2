@@ -19,7 +19,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.40'
+APP_VERSION = '2026.3.42'
 QB_TORRENT_UP_LIMIT_BYTES = 50 * 1024 * 1024  # default: 50 MB/s per torrent
 LOCAL_TZ = ZoneInfo('Asia/Shanghai')
 
@@ -299,8 +299,8 @@ def u2_send_self_magic(cfg: dict, tid: int):
         return False, str(e)
 
 
-def auto_self_magic_once(cfg: dict, state: dict):
-    if not cfg.get('auto_self_magic_enabled'):
+def auto_self_magic_once(cfg: dict, state: dict, force: bool = False):
+    if (not force) and (not cfg.get('auto_self_magic_enabled')):
         return {'ok': True, 'done': 0, 'msg': '未启用'}
 
     min_up = int(cfg.get('auto_self_magic_min_upload_kib') or 1024) * 1024
@@ -1050,7 +1050,7 @@ def retry_failed():
 def self_magic_once():
     cfg = load_config()
     st = load_json(STATE_PATH, {'last_seen': [], 'last_run': None, 'last_error': None, 'qb_rr_index': 0, 'failed_pushes': []})
-    res = auto_self_magic_once(cfg, st)
+    res = auto_self_magic_once(cfg, st, force=True)
     save_json(STATE_PATH, st)
     return res
 
