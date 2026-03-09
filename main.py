@@ -19,7 +19,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.42'
+APP_VERSION = '2026.3.44'
 QB_TORRENT_UP_LIMIT_BYTES = 50 * 1024 * 1024  # default: 50 MB/s per torrent
 LOCAL_TZ = ZoneInfo('Asia/Shanghai')
 
@@ -38,6 +38,9 @@ DEFAULT_CONFIG = {
     'auto_self_magic_min_upload_kib': 1024,
     'auto_self_magic_min_size_gb': 5,
     'auto_self_magic_hours': 24,
+    'auto_self_magic_interval': 60,
+    'auto_self_magic_magic_downloading': True,
+    'auto_self_magic_min_d': 180,
     'u2_uid': 0,
     'u2_cookie': '',
     'qb_up_limit_mb': 50,
@@ -303,8 +306,17 @@ def auto_self_magic_once(cfg: dict, state: dict, force: bool = False):
     if (not force) and (not cfg.get('auto_self_magic_enabled')):
         return {'ok': True, 'done': 0, 'msg': '未启用'}
 
+    now = int(time.time())
+    interval = max(10, int(cfg.get('auto_self_magic_interval') or 60))
+    if (not force):
+        last_ts = int(state.get('self_magic_last_ts') or 0)
+        if now - last_ts < interval:
+            return {'ok': True, 'done': 0, 'msg': f'未到检查间隔({interval}s)'}
+
     min_up = int(cfg.get('auto_self_magic_min_upload_kib') or 1024) * 1024
     min_size = int(cfg.get('auto_self_magic_min_size_gb') or 5) * 1024 * 1024 * 1024
+    min_days = max(0, int(cfg.get('auto_self_magic_min_d') or 0))
+    allow_downloading = bool(cfg.get('auto_self_magic_magic_downloading', True))
 
     candidates = []
     clients = [c for c in (cfg.get('qb_clients') or []) if c.get('enabled', True)]
@@ -323,11 +335,14 @@ def auto_self_magic_once(cfg: dict, state: dict, force: bool = False):
             up = int(t.get('upspeed') or 0)
             size = int(t.get('size') or 0)
             prog = float(t.get('progress') or 0)
+            added_on = int(t.get('added_on') or 0)
             if up < min_up:
                 continue
             if size < min_size:
                 continue
-            if prog < 1.0:
+            if (not allow_downloading) and prog < 1.0:
+                continue
+            if min_days > 0 and added_on > 0 and (now - added_on) < min_days * 86400:
                 continue
             candidates.append({'hash': (t.get('hash') or '').lower(), 'up': up, 'size': size})
 
@@ -358,6 +373,7 @@ def auto_self_magic_once(cfg: dict, state: dict, force: bool = False):
             log(f'自放魔法失败：tid={tid}，原因={msg}')
 
     state['self_magic_recent'] = recent
+    state['self_magic_last_ts'] = now
     return {'ok': True, 'done': done, 'msg': f'处理{len(candidates)}，成功{done}'}
 
 
@@ -587,6 +603,9 @@ class ConfigIn(BaseModel):
     auto_self_magic_min_upload_kib: int = 1024
     auto_self_magic_min_size_gb: int = 5
     auto_self_magic_hours: int = 24
+    auto_self_magic_interval: int = 60
+    auto_self_magic_magic_downloading: bool = True
+    auto_self_magic_min_d: int = 180
     u2_uid: int = 0
     u2_cookie: str = ''
     qb_up_limit_mb: int = 50
@@ -668,7 +687,7 @@ def index():
 </head>
 <body>
   <div class='wrap'>
-    <div class='title'><h2>Catch Magic Web <span style='font-size:13px;color:var(--sub);font-weight:500'>v__APP_VERSION__</span></h2><div class='actions'><button class='ghost' type='button' onclick='openMainConfigModal()'>基础配置</button><button class='ghost' type='button' onclick='openTGModal()'>TG配置</button><button class='ghost' type='button' onclick='runSelfMagicOnce()'>手动自放魔法</button><button class='ghost' type='button' onclick='retryFailedPushes()'>重推失败任务</button><button class='ghost' type='button' onclick='toggleTheme()'>🌗 主题切换</button><div class='badge' id='runBadge'>状态读取中...</div></div></div>
+    <div class='title'><h2>Catch Magic Web <span style='font-size:13px;color:var(--sub);font-weight:500'>v__APP_VERSION__</span></h2><div class='actions'><button class='ghost' type='button' onclick='openMainConfigModal()'>基础配置</button><button class='ghost' type='button' onclick='openTGModal()'>TG配置</button><button class='ghost' type='button' onclick='openMagicCfgModal()'>自放魔法配置</button><button class='ghost' type='button' onclick='runSelfMagicOnce()'>手动自放魔法</button><button class='ghost' type='button' onclick='retryFailedPushes()'>重推失败任务</button><button class='ghost' type='button' onclick='toggleTheme()'>🌗 主题切换</button><div class='badge' id='runBadge'>状态读取中...</div></div></div>
     <div id='app' class='grid'>loading...</div>
   </div>
 <script>
@@ -686,6 +705,30 @@ function applyTheme(){ const t=getTheme(); document.body.classList.toggle('theme
 function toggleTheme(){ localStorage.setItem('cm_theme', getTheme()==='light'?'dark':'light'); applyTheme(); }
 
 
+
+
+function openMagicCfgModal(){ const m=document.getElementById('magicCfgModal'); if(m) m.style.display='flex'; }
+function closeMagicCfgModal(){ const m=document.getElementById('magicCfgModal'); if(m) m.style.display='none'; }
+async function saveMagicConfigOnly(){
+  const c=await j('/api/config');
+  const body={...c,
+    auto_self_magic_enabled:document.getElementById('auto_self_magic_enabled')?.checked||false,
+    auto_self_magic_min_upload_kib:parseInt(document.getElementById('auto_self_magic_min_upload_kib')?.value||'1024'),
+    auto_self_magic_min_size_gb:parseInt(document.getElementById('auto_self_magic_min_size_gb')?.value||'5'),
+    auto_self_magic_hours:parseInt(document.getElementById('auto_self_magic_hours')?.value||'24'),
+    auto_self_magic_interval:parseInt(document.getElementById('auto_self_magic_interval')?.value||'60'),
+    auto_self_magic_magic_downloading:document.getElementById('auto_self_magic_magic_downloading')?.checked!==false,
+    auto_self_magic_min_d:parseInt(document.getElementById('auto_self_magic_min_d')?.value||'180'),
+    u2_uid:parseInt(document.getElementById('u2_uid')?.value||'0'),
+    u2_cookie:(document.getElementById('u2_cookie')?.value||'').trim(),
+    qb_clients: qbClients,
+    ...collectTG(),
+  };
+  await fetch('/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  alert('自放魔法配置已保存');
+  closeMagicCfgModal();
+  setTimeout(load,300);
+}
 
 function openMainConfigModal(){ const m=document.getElementById('mainCfgModal'); if(m) m.style.display='flex'; }
 function closeMainConfigModal(){ const m=document.getElementById('mainCfgModal'); if(m) m.style.display='none'; }
@@ -769,7 +812,33 @@ function saveQbConfig(){
 
 function renderQbModules(items=[]){
   const el=document.getElementById('qbModules'); if(!el) return;
-  if(!qbClients.length){ el.innerHTML = `<div class='tip'>暂无 qB 模块</div>`; return; }
+  if(!qbClients.length){ el.innerHTML = `<div class='tip'>暂无 qB 模块
+
+ <div id='magicCfgModal' style='display:none;position:fixed;inset:0;background:#0008;z-index:1000;align-items:center;justify-content:center;padding:14px'>
+   <div style='width:min(700px,100%);max-height:90vh;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px'>
+     <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px'>
+       <div style='font-weight:700;color:var(--text)'>自放魔法配置</div>
+       <button class='ghost' onclick='closeMagicCfgModal()'>关闭</button>
+     </div>
+     <div class='editor-grid'>
+       <div class='switch full'><input id='auto_self_magic_enabled' type='checkbox' ${c.auto_self_magic_enabled?'checked':''}><label for='auto_self_magic_enabled' style='margin:0;color:var(--text)'>启用自动给自己放2.33x魔法</label></div>
+       <div><label>检查间隔(秒)</label><input id='auto_self_magic_interval' type='number' min='10' value='${c.auto_self_magic_interval??60}'></div>
+       <div class='switch'><input id='auto_self_magic_magic_downloading' type='checkbox' ${c.auto_self_magic_magic_downloading!==false?'checked':''}><label for='auto_self_magic_magic_downloading' style='margin:0;color:var(--text)'>包含下载中的种子</label></div>
+       <div><label>最小上传速度(KiB/s)</label><input id='auto_self_magic_min_upload_kib' type='number' min='1' value='${c.auto_self_magic_min_upload_kib??1024}'></div>
+       <div><label>最小体积(GB)</label><input id='auto_self_magic_min_size_gb' type='number' min='1' value='${c.auto_self_magic_min_size_gb??5}'></div>
+       <div><label>种子最小生存天数</label><input id='auto_self_magic_min_d' type='number' min='0' value='${c.auto_self_magic_min_d??180}'></div>
+       <div><label>魔法时长(小时)</label><input id='auto_self_magic_hours' type='number' min='1' max='360' value='${c.auto_self_magic_hours??24}'></div>
+       <div><label>U2 UID</label><input id='u2_uid' type='number' min='0' value='${c.u2_uid??0}'></div>
+       <div class='full'><label>U2 Cookie(nexusphp_u2)</label><input id='u2_cookie' type='password' autocomplete='new-password' value='${esc(c.u2_cookie||'')}'></div>
+     </div>
+     <div class='actions' style='margin-top:10px'>
+       <button onclick='saveMagicConfigOnly()'>保存自放魔法配置</button>
+       <button onclick='runSelfMagicOnce()'>立即手动执行一次</button>
+     </div>
+   </div>
+ </div>
+
+</div>`; return; }
   el.innerHTML = qbClients.map((q,i)=>{
     const it = items[i] || {};
     const ok = !!it.ok;
@@ -848,12 +917,6 @@ async function load(){
    <div><label>执行间隔（秒）</label><input id='interval' type='number' min='10' value='${c.interval}'></div>
    <div><label>抓取条数（limit）</label><input id='limit' type='number' min='1' max='60' value='${c.limit}'></div>
    <div><label>最大做种人数</label><input id='max_seeders' type='number' min='0' value='${c.max_seeders??5}'></div>
-   <div class='switch'><input id='auto_self_magic_enabled' type='checkbox' ${c.auto_self_magic_enabled?'checked':''}><label for='auto_self_magic_enabled' style='margin:0;color:var(--text)'>自动给自己放2.33x魔法</label></div>
-   <div><label>自放最小上传(KiB/s)</label><input id='auto_self_magic_min_upload_kib' type='number' min='1' value='${c.auto_self_magic_min_upload_kib??1024}'></div>
-   <div><label>自放最小体积(GB)</label><input id='auto_self_magic_min_size_gb' type='number' min='1' value='${c.auto_self_magic_min_size_gb??5}'></div>
-   <div><label>自放魔法时长(小时)</label><input id='auto_self_magic_hours' type='number' min='1' max='360' value='${c.auto_self_magic_hours??24}'></div>
-   <div><label>U2 UID</label><input id='u2_uid' type='number' min='0' value='${c.u2_uid??0}'></div>
-   <div class='full'><label>U2 Cookie(nexusphp_u2)</label><input id='u2_cookie' type='password' autocomplete='new-password' value='${esc(c.u2_cookie||'')}'></div>
    <div class='full'><label>U2 API Base</label><input id='u2_api_base' value='${esc(c.u2_api_base)}'></div>
    <div class='full'><label>U2 API Token</label><input id='u2_api_token' name='u2_api_token_input' type='password' autocomplete='new-password' autocapitalize='off' autocorrect='off' spellcheck='false' value='${esc(c.u2_api_token||'')}'></div>
    <div class='full'><label>U2 Passkey</label><input id='u2_passkey' name='u2_passkey_input' type='password' autocomplete='new-password' autocapitalize='off' autocorrect='off' spellcheck='false' value='${esc(c.u2_passkey||'')}'></div>
@@ -910,7 +973,33 @@ async function load(){
        <button onclick='testTG()'>测试通知</button>
      </div>
    </div>
- </div>`;
+ 
+
+ <div id='magicCfgModal' style='display:none;position:fixed;inset:0;background:#0008;z-index:1000;align-items:center;justify-content:center;padding:14px'>
+   <div style='width:min(700px,100%);max-height:90vh;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px'>
+     <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px'>
+       <div style='font-weight:700;color:var(--text)'>自放魔法配置</div>
+       <button class='ghost' onclick='closeMagicCfgModal()'>关闭</button>
+     </div>
+     <div class='editor-grid'>
+       <div class='switch full'><input id='auto_self_magic_enabled' type='checkbox' ${c.auto_self_magic_enabled?'checked':''}><label for='auto_self_magic_enabled' style='margin:0;color:var(--text)'>启用自动给自己放2.33x魔法</label></div>
+       <div><label>检查间隔(秒)</label><input id='auto_self_magic_interval' type='number' min='10' value='${c.auto_self_magic_interval??60}'></div>
+       <div class='switch'><input id='auto_self_magic_magic_downloading' type='checkbox' ${c.auto_self_magic_magic_downloading!==false?'checked':''}><label for='auto_self_magic_magic_downloading' style='margin:0;color:var(--text)'>包含下载中的种子</label></div>
+       <div><label>最小上传速度(KiB/s)</label><input id='auto_self_magic_min_upload_kib' type='number' min='1' value='${c.auto_self_magic_min_upload_kib??1024}'></div>
+       <div><label>最小体积(GB)</label><input id='auto_self_magic_min_size_gb' type='number' min='1' value='${c.auto_self_magic_min_size_gb??5}'></div>
+       <div><label>种子最小生存天数</label><input id='auto_self_magic_min_d' type='number' min='0' value='${c.auto_self_magic_min_d??180}'></div>
+       <div><label>魔法时长(小时)</label><input id='auto_self_magic_hours' type='number' min='1' max='360' value='${c.auto_self_magic_hours??24}'></div>
+       <div><label>U2 UID</label><input id='u2_uid' type='number' min='0' value='${c.u2_uid??0}'></div>
+       <div class='full'><label>U2 Cookie(nexusphp_u2)</label><input id='u2_cookie' type='password' autocomplete='new-password' value='${esc(c.u2_cookie||'')}'></div>
+     </div>
+     <div class='actions' style='margin-top:10px'>
+       <button onclick='saveMagicConfigOnly()'>保存自放魔法配置</button>
+       <button onclick='runSelfMagicOnce()'>立即手动执行一次</button>
+     </div>
+   </div>
+ </div>
+
+</div>`;
  setTGForm(c);
  await refreshQbStats();
  if(qbStatsTimer) clearInterval(qbStatsTimer);
@@ -931,12 +1020,7 @@ async function save(){
   qb_mode:document.getElementById('qb_mode').value,
   qb_up_limit_mb:parseInt(document.getElementById('qb_up_limit_mb').value||'50'),
   require_2x_free:document.getElementById('require_2x_free')?.checked!==false,
-  auto_self_magic_enabled:document.getElementById('auto_self_magic_enabled')?.checked||false,
-  auto_self_magic_min_upload_kib:parseInt(document.getElementById('auto_self_magic_min_upload_kib')?.value||'1024'),
-  auto_self_magic_min_size_gb:parseInt(document.getElementById('auto_self_magic_min_size_gb')?.value||'5'),
-  auto_self_magic_hours:parseInt(document.getElementById('auto_self_magic_hours')?.value||'24'),
-  u2_uid:parseInt(document.getElementById('u2_uid')?.value||'0'),
-  u2_cookie:(document.getElementById('u2_cookie')?.value||'').trim(),
+
   qb_clients:qbClients,
   ...collectTG(),
  };
