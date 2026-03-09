@@ -19,7 +19,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.28'
+APP_VERSION = '2026.3.30'
 QB_TORRENT_UP_LIMIT_BYTES = 50 * 1024 * 1024  # default: 50 MB/s per torrent
 LOCAL_TZ = ZoneInfo('Asia/Shanghai')
 
@@ -611,12 +611,14 @@ async function load(){
        <button class='ghost' onclick='closeMainConfigModal()'>关闭</button>
      </div>
  <div class='card'><div class='form'>
+   <input style='display:none' type='text' name='fake_username' autocomplete='username'>
+   <input style='display:none' type='password' name='fake_password' autocomplete='current-password'>
    <div class='full switch'><input id='enabled' type='checkbox' ${c.enabled?'checked':''}><label for='enabled' style='margin:0;color:var(--text)'>启用定时任务</label></div>
    <div><label>执行间隔（秒）</label><input id='interval' type='number' min='10' value='${c.interval}'></div>
    <div><label>抓取条数（limit）</label><input id='limit' type='number' min='1' max='60' value='${c.limit}'></div>
    <div class='full'><label>U2 API Base</label><input id='u2_api_base' value='${esc(c.u2_api_base)}'></div>
-   <div class='full'><label>U2 API Token</label><input id='u2_api_token' type='password' value='${esc(c.u2_api_token||'')}'></div>
-   <div class='full'><label>U2 Passkey</label><input id='u2_passkey' type='password' value='${esc(c.u2_passkey||'')}'></div>
+   <div class='full'><label>U2 API Token</label><input id='u2_api_token' name='u2_api_token_input' type='password' autocomplete='new-password' autocapitalize='off' autocorrect='off' spellcheck='false' value='${esc(c.u2_api_token||'')}'></div>
+   <div class='full'><label>U2 Passkey</label><input id='u2_passkey' name='u2_passkey_input' type='password' autocomplete='new-password' autocapitalize='off' autocorrect='off' spellcheck='false' value='${esc(c.u2_passkey||'')}'></div>
    <div><label>魔法范围（scope）</label><select id='scope'><option value='public' ${c.scope==='public'?'selected':''}>公共魔法（public）</option><option value='all' ${c.scope==='all'?'selected':''}>全部魔法（all）</option><option value='private' ${c.scope==='private'?'selected':''}>私人魔法（private）</option><option value='global' ${c.scope==='global'?'selected':''}>全局魔法（global）</option></select></div>
    <div><label>qB 分发模式</label><select id='qb_mode'><option value='round_robin' ${c.qb_mode==='round_robin'?'selected':''}>轮询分发</option><option value='all' ${c.qb_mode==='all'?'selected':''}>全部推送</option></select></div>
    <div><label>单种上传限速(MB/s)</label><input id='qb_up_limit_mb' type='number' min='0' value='${c.qb_up_limit_mb??50}'></div>
@@ -659,7 +661,7 @@ async function load(){
      </div>
      <div class='editor-grid'>
        <div class='switch full'><input id='tg_enabled' type='checkbox'><label for='tg_enabled' style='margin:0;color:var(--text)'>启用TG通知</label></div>
-       <div class='full'><label style='color:var(--text)'>Bot Token</label><input id='tg_bot_token' placeholder='123456:ABC...'></div>
+       <div class='full'><label style='color:var(--text)'>Bot Token</label><input id='tg_bot_token' name='tg_bot_token_input' type='password' autocomplete='new-password' autocapitalize='off' autocorrect='off' spellcheck='false' placeholder='123456:ABC...'></div>
        <div class='full'><label style='color:var(--text)'>Chat ID</label><input id='tg_chat_id' placeholder='例如 1036463619'></div>
        <div class='switch'><input id='tg_notify_new' type='checkbox'><label for='tg_notify_new' style='margin:0;color:var(--text)'>新推广通知</label></div>
        <div class='switch'><input id='tg_notify_error' type='checkbox'><label for='tg_notify_error' style='margin:0;color:var(--text)'>失败告警通知</label></div>
