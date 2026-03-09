@@ -19,7 +19,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.44'
+APP_VERSION = '2026.3.46'
 QB_TORRENT_UP_LIMIT_BYTES = 50 * 1024 * 1024  # default: 50 MB/s per torrent
 LOCAL_TZ = ZoneInfo('Asia/Shanghai')
 
@@ -687,7 +687,7 @@ def index():
 </head>
 <body>
   <div class='wrap'>
-    <div class='title'><h2>Catch Magic Web <span style='font-size:13px;color:var(--sub);font-weight:500'>v__APP_VERSION__</span></h2><div class='actions'><button class='ghost' type='button' onclick='openMainConfigModal()'>基础配置</button><button class='ghost' type='button' onclick='openTGModal()'>TG配置</button><button class='ghost' type='button' onclick='openMagicCfgModal()'>自放魔法配置</button><button class='ghost' type='button' onclick='runSelfMagicOnce()'>手动自放魔法</button><button class='ghost' type='button' onclick='retryFailedPushes()'>重推失败任务</button><button class='ghost' type='button' onclick='toggleTheme()'>🌗 主题切换</button><div class='badge' id='runBadge'>状态读取中...</div></div></div>
+    <div class='title'><h2>Catch Magic Web <span style='font-size:13px;color:var(--sub);font-weight:500'>v__APP_VERSION__</span></h2><div class='actions'><button class='ghost' type='button' onclick='openMainConfigModal()'>基础配置</button><button class='ghost' type='button' onclick='openTGModal()'>TG配置</button><button class='ghost' type='button' class='ghost compact' type='button' onclick='openMagicCfgModal()'>魔法配置</button><button class='ghost' type='button' class='ghost compact' type='button' onclick='runSelfMagicOnce()'>手动魔法</button><button class='ghost' type='button' class='ghost compact' type='button' onclick='retryFailedPushes()'>失败重推</button><button class='ghost' type='button' onclick='toggleTheme()'>🌗 主题切换</button><div class='badge' id='runBadge'>状态读取中...</div></div></div>
     <div id='app' class='grid'>loading...</div>
   </div>
 <script>
@@ -813,30 +813,6 @@ function saveQbConfig(){
 function renderQbModules(items=[]){
   const el=document.getElementById('qbModules'); if(!el) return;
   if(!qbClients.length){ el.innerHTML = `<div class='tip'>暂无 qB 模块
-
- <div id='magicCfgModal' style='display:none;position:fixed;inset:0;background:#0008;z-index:1000;align-items:center;justify-content:center;padding:14px'>
-   <div style='width:min(700px,100%);max-height:90vh;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px'>
-     <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px'>
-       <div style='font-weight:700;color:var(--text)'>自放魔法配置</div>
-       <button class='ghost' onclick='closeMagicCfgModal()'>关闭</button>
-     </div>
-     <div class='editor-grid'>
-       <div class='switch full'><input id='auto_self_magic_enabled' type='checkbox' ${c.auto_self_magic_enabled?'checked':''}><label for='auto_self_magic_enabled' style='margin:0;color:var(--text)'>启用自动给自己放2.33x魔法</label></div>
-       <div><label>检查间隔(秒)</label><input id='auto_self_magic_interval' type='number' min='10' value='${c.auto_self_magic_interval??60}'></div>
-       <div class='switch'><input id='auto_self_magic_magic_downloading' type='checkbox' ${c.auto_self_magic_magic_downloading!==false?'checked':''}><label for='auto_self_magic_magic_downloading' style='margin:0;color:var(--text)'>包含下载中的种子</label></div>
-       <div><label>最小上传速度(KiB/s)</label><input id='auto_self_magic_min_upload_kib' type='number' min='1' value='${c.auto_self_magic_min_upload_kib??1024}'></div>
-       <div><label>最小体积(GB)</label><input id='auto_self_magic_min_size_gb' type='number' min='1' value='${c.auto_self_magic_min_size_gb??5}'></div>
-       <div><label>种子最小生存天数</label><input id='auto_self_magic_min_d' type='number' min='0' value='${c.auto_self_magic_min_d??180}'></div>
-       <div><label>魔法时长(小时)</label><input id='auto_self_magic_hours' type='number' min='1' max='360' value='${c.auto_self_magic_hours??24}'></div>
-       <div><label>U2 UID</label><input id='u2_uid' type='number' min='0' value='${c.u2_uid??0}'></div>
-       <div class='full'><label>U2 Cookie(nexusphp_u2)</label><input id='u2_cookie' type='password' autocomplete='new-password' value='${esc(c.u2_cookie||'')}'></div>
-     </div>
-     <div class='actions' style='margin-top:10px'>
-       <button onclick='saveMagicConfigOnly()'>保存自放魔法配置</button>
-       <button onclick='runSelfMagicOnce()'>立即手动执行一次</button>
-     </div>
-   </div>
- </div>
 
 </div>`; return; }
   el.innerHTML = qbClients.map((q,i)=>{
