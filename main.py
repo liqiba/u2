@@ -19,7 +19,7 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.46'
+APP_VERSION = '2026.3.48'
 QB_TORRENT_UP_LIMIT_BYTES = 50 * 1024 * 1024  # default: 50 MB/s per torrent
 LOCAL_TZ = ZoneInfo('Asia/Shanghai')
 
@@ -707,8 +707,23 @@ function toggleTheme(){ localStorage.setItem('cm_theme', getTheme()==='light'?'d
 
 
 
-function openMagicCfgModal(){ const m=document.getElementById('magicCfgModal'); if(m) m.style.display='flex'; }
-function closeMagicCfgModal(){ const m=document.getElementById('magicCfgModal'); if(m) m.style.display='none'; }
+function openMagicCfgModal(){
+  let m=document.getElementById('magicCfgModal');
+  if(!m){
+    // 某些情况下页面局部刷新后弹窗节点未挂载，主动重载一次再打开
+    load().then(()=>{
+      const mm=document.getElementById('magicCfgModal');
+      if(mm) mm.style.display='flex';
+      else alert('魔法配置弹窗加载失败，请刷新页面后重试');
+    });
+    return;
+  }
+  m.style.display='flex';
+}
+function closeMagicCfgModal(){
+  const m=document.getElementById('magicCfgModal');
+  if(m) m.style.display='none';
+}
 async function saveMagicConfigOnly(){
   const c=await j('/api/config');
   const body={...c,
