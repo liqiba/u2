@@ -207,10 +207,17 @@ async function saveAuth(ev){
 
 async function deleteAuthPassword(ev){
   if(!confirm('确认删除访问密码？删除后将恢复免密访问。')) return;
+  const currentPassword = prompt('请输入当前密码以确认删除：');
+  if(currentPassword===null) return;
+  if(!currentPassword.trim()){ toast('请输入当前密码', false); return; }
   setLoading(ev?.target, true);
   let d={ok:false,error:'请求失败'};
   try{
-    d = await fetch('/api/security/password/delete',{method:'POST'}).then(r=>r.json());
+    d = await fetch('/api/security/password/delete',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({current_password: currentPassword.trim()})
+    }).then(r=>r.json());
   }catch(e){ d={ok:false,error:'请求失败'}; }
   setLoading(ev?.target, false);
   if(d.ok){ cfg=null; toast('访问密码已删除，已恢复免密访问', true); renderAuth(); }

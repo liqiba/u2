@@ -31,7 +31,7 @@ STATE_PATH = DATA_DIR / 'state.json'
 UPGRADE_REQUEST_PATH = DATA_DIR / 'upgrade.request.json'
 UPGRADE_STATUS_PATH = DATA_DIR / 'upgrade.status.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.93'
+APP_VERSION = '2026.3.94'
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / 'templates'
 STATIC_DIR = BASE_DIR / 'static'
@@ -1548,12 +1548,22 @@ def set_web_password(payload: dict):
 
 
 @app.post('/api/security/password/delete')
-def delete_web_password():
+def delete_web_password(payload: dict = None):
     raw = load_config()
+    current_password = str((payload or {}).get('current_password') or '').strip()
+    stored = str(raw.get('web_password_hash') or '')
+
+    if not stored:
+        return JSONResponse({'ok': False, 'error': '当前未设置访问密码'}, status_code=400)
+    if not current_password:
+        return JSONResponse({'ok': False, 'error': '请输入当前密码'}, status_code=400)
+    if not _verify_password(current_password, stored):
+        return JSONResponse({'ok': False, 'error': '当前密码错误，无法删除'}, status_code=401)
+
     raw['web_password_hash'] = ''
     raw['web_auth_enabled'] = False
     save_json(CONFIG_PATH, raw)
-    log('访问密码已删除，恢复免密访问')
+    log('访问密码已删除，恢复免密访问（已校验当前密码）')
     return {'ok': True}
 
 
