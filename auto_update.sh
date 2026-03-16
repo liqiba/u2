@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO_DIR="/opt/catch_magic_web"
 LOG_FILE="/opt/catch_magic_web/logs/auto_update.log"
-API_URL="http://127.0.0.1:18088/api/status"
+HEALTH_URL="http://127.0.0.1:18088/"
 SERVICE_NAME="catch-magic-web"
 REQUEST_FILE="/opt/catch_magic_web/data/upgrade.request.json"
 STATUS_FILE="/opt/catch_magic_web/data/upgrade.status.json"
@@ -45,13 +45,13 @@ PY
   # 默认健康巡检
   if [[ ! -f "$REQUEST_FILE" ]]; then
     sleep 1
-    if curl -fsS "$API_URL" >/dev/null 2>&1; then
+    if curl -fsS "$HEALTH_URL" >/dev/null 2>&1; then
       exit 0
     fi
     log "health check failed, trying restart"
     docker-compose restart "$SERVICE_NAME" >/dev/null 2>&1 || true
     sleep 4
-    if curl -fsS "$API_URL" >/dev/null 2>&1; then
+    if curl -fsS "$HEALTH_URL" >/dev/null 2>&1; then
       log "self-heal by restart ok"
       exit 0
     fi
@@ -89,7 +89,7 @@ PY
   fi
 
   sleep 4
-  if curl -fsS "$API_URL" >/dev/null 2>&1; then
+  if curl -fsS "$HEALTH_URL" >/dev/null 2>&1; then
     set_status success "升级成功：${LOCAL_SHA:0:7} -> ${REMOTE_SHA:0:7}"
     log "upgrade success: $LOCAL_SHA -> $REMOTE_SHA"
     tg_send "✅ U2 升级成功\n版本: ${LOCAL_SHA:0:7} -> ${REMOTE_SHA:0:7}"
