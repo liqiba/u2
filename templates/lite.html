@@ -390,6 +390,7 @@ function upgradeStateText(d){
   const st=(d.state||'unknown').toLowerCase();
   if(st==='running') return `🟡 升级中`;
   if(st==='success') return `🟢 升级成功`;
+  if(st==='latest') return `✅ 已是最新版本`;
   if(st==='failed') return `🔴 升级失败`;
   return `⚪ 待命`;
 }
@@ -418,6 +419,11 @@ function startUpgradeWatch(){
     const st=((d&&d.state)||'').toLowerCase();
     if(st==='success'){
       toast('✅ 升级成功', true);
+      stopUpgradeWatch();
+      return;
+    }
+    if(st==='latest'){
+      toast('✅ 已是最新版本，无需升级', true);
       stopUpgradeWatch();
       return;
     }

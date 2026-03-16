@@ -73,6 +73,14 @@ PY
   LOCAL_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
   REMOTE_SHA="$(git rev-parse origin/main 2>/dev/null || true)"
 
+  if [[ -n "$REMOTE_SHA" && "$LOCAL_SHA" == "$REMOTE_SHA" ]]; then
+    set_status latest "已经是最新版本，无需升级"
+    log "already latest: $LOCAL_SHA"
+    tg_send "✅ U2 已是最新版本，无需升级"
+    rm -f "$REQUEST_FILE"
+    exit 0
+  fi
+
   if ! git reset --hard origin/main >/dev/null 2>&1; then
     set_status failed "git reset 失败"
     tg_send "❌ U2 升级失败：git reset 失败"
