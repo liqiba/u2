@@ -378,13 +378,55 @@ async function queryMagicHistory(ev){
   `);
 }
 
+let upgradeWatchTimer=null;
+let upgradeLastState='';
+
+function upgradeStateText(d){
+  const st=(d.state||'unknown').toLowerCase();
+  const msg=d.message||'';
+  if(st==='running') return `🟡 升级中 | ${d.updated_at||'-'} | ${msg}`;
+  if(st==='success') return `🟢 升级成功 | ${d.updated_at||'-'} | ${msg}`;
+  if(st==='failed') return `🔴 升级失败 | ${d.updated_at||'-'} | ${msg}`;
+  return `⚪ ${d.state||'unknown'} | ${d.updated_at||'-'} | ${msg}`;
+}
+
 async function refreshUpgradeStatus(){
   try{
     const d = await fetch('/api/upgrade/status').then(r=>r.json());
     const node = el('upgrade-status');
     if(!node) return;
-    node.textContent = `状态: ${d.state||'unknown'} | 时间: ${d.updated_at||'-'} | ${d.message||''}`;
+    node.textContent = upgradeStateText(d);
+    upgradeLastState = (d.state||'').toLowerCase();
+    return d;
   }catch(e){ }
+}
+
+function stopUpgradeWatch(){
+  if(upgradeWatchTimer){ clearInterval(upgradeWatchTimer); upgradeWatchTimer=null; }
+}
+
+function startUpgradeWatch(){
+  stopUpgradeWatch();
+  let rounds=0;
+  upgradeWatchTimer=setInterval(async ()=>{
+    rounds++;
+    const d=await refreshUpgradeStatus();
+    const st=((d&&d.state)||'').toLowerCase();
+    if(st==='success'){
+      toast('✅ 升级成功', true);
+      stopUpgradeWatch();
+      return;
+    }
+    if(st==='failed'){
+      toast(`❌ 升级失败：${(d&&d.message)||'未知错误'}`, false);
+      stopUpgradeWatch();
+      return;
+    }
+    if(rounds>=180){
+      toast('升级状态等待超时，请查看状态栏', false);
+      stopUpgradeWatch();
+    }
+  }, 2000);
 }
 
 async function triggerUpgrade(ev){
@@ -395,8 +437,11 @@ async function triggerUpgrade(ev){
     d=await fetch('/api/upgrade/request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:'web'})}).then(r=>r.json());
   }catch(e){ d={ok:false,error:'请求失败'}; }
   setLoading(ev?.target, false);
-  if(d.ok){ toast('升级请求已提交', true); refreshUpgradeStatus(); }
-  else toast(`提交失败：${d.error||'unknown'}`, false);
+  if(d.ok){
+    toast('已提交升级请求，开始监控结果…', true);
+    await refreshUpgradeStatus();
+    startUpgradeWatch();
+  }else toast(`提交失败：${d.error||'unknown'}`, false);
 }
 
 async function refreshLogs(force=false){
