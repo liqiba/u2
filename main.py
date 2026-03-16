@@ -31,7 +31,7 @@ STATE_PATH = DATA_DIR / 'state.json'
 UPGRADE_REQUEST_PATH = DATA_DIR / 'upgrade.request.json'
 UPGRADE_STATUS_PATH = DATA_DIR / 'upgrade.status.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.91'
+APP_VERSION = '2026.3.92'
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / 'templates'
 STATIC_DIR = BASE_DIR / 'static'
@@ -125,6 +125,80 @@ def tg_notify(cfg: dict, text: str):
     except Exception as e:
         log(f'TG通知发送失败：{e}')
         return False, str(e)
+
+
+def tg_api(cfg: dict, method: str, payload: dict = None, timeout: int = 15):
+    token = (cfg.get('tg_bot_token') or '').strip()
+    if not token:
+        return None, '缺少TG Bot Token'
+    try:
+        r = requests.post(
+            f'https://api.telegram.org/bot{token}/{method}',
+            json=(payload or {}),
+            timeout=timeout,
+        )
+        if r.status_code != 200:
+            return None, f'HTTP {r.status_code}: {r.text[:120]}'
+        d = r.json() if r.text else {}
+        if not d.get('ok', False):
+            return None, d.get('description', 'TG接口返回失败')
+        return d.get('result'), None
+    except Exception as e:
+        return None, str(e)
+
+
+def tg_set_upgrade_menu(cfg: dict):
+    if not cfg.get('tg_enabled'):
+        return False, 'TG未启用'
+    commands = [
+        {'command': 'upgrade', 'description': '一键升级容器'},
+        {'command': 'upgradestatus', 'description': '查看升级状态'},
+    ]
+    _, err = tg_api(cfg, 'setMyCommands', {'commands': commands, 'scope': {'type': 'chat', 'chat_id': str(cfg.get('tg_chat_id') or '')}})
+    if err:
+        return False, err
+    return True, 'ok'
+
+
+def tg_poll_upgrade_commands(cfg: dict, state: dict):
+    if not cfg.get('tg_enabled'):
+        return
+    chat_id = str(cfg.get('tg_chat_id') or '').strip()
+    if not chat_id:
+        return
+
+    offset = int(state.get('tg_update_offset') or 0)
+    result, err = tg_api(cfg, 'getUpdates', {'offset': offset, 'timeout': 0, 'limit': 30}, timeout=20)
+    if err:
+        return
+    if not isinstance(result, list) or not result:
+        return
+
+    for up in result:
+        try:
+            uid = int(up.get('update_id') or 0)
+            if uid >= offset:
+                offset = uid + 1
+            msg = up.get('message') or {}
+            txt = str(msg.get('text') or '').strip().lower()
+            cid = str(((msg.get('chat') or {}).get('id')))
+            if cid != chat_id:
+                continue
+            if txt == '/upgrade':
+                if UPGRADE_REQUEST_PATH.exists():
+                    tg_notify(cfg, '⏳ 已有升级任务在队列中，请稍候。')
+                    continue
+                save_json(UPGRADE_REQUEST_PATH, {'requested_at': now_iso(), 'source': 'tg:/upgrade', 'note': 'telegram menu'})
+                save_json(UPGRADE_STATUS_PATH, {'state': 'queued', 'updated_at': now_iso(), 'message': '已从TG菜单触发升级'})
+                tg_notify(cfg, '🚀 已收到一键升级指令，开始异步升级。')
+                log('TG菜单触发升级请求：/upgrade')
+            elif txt == '/upgradestatus':
+                st = load_json(UPGRADE_STATUS_PATH, {'state': 'idle', 'updated_at': now_iso(), 'message': '暂无升级任务'})
+                tg_notify(cfg, f"📦 升级状态\n状态: {st.get('state')}\n时间: {st.get('updated_at')}\n信息: {st.get('message')}")
+        except Exception:
+            continue
+
+    state['tg_update_offset'] = offset
 
 
 def load_json(path: Path, default):
@@ -910,6 +984,20 @@ class Runner:
     def _loop(self):
         while not self._stop:
             cfg = load_config()
+            state = load_json(STATE_PATH, {'last_seen': [], 'last_run': None, 'last_error': None, 'qb_rr_index': 0, 'failed_pushes': []})
+
+            # 每小时同步一次 TG 菜单命令（/upgrade）
+            now_ts = int(time.time())
+            last_menu_sync = int(state.get('tg_menu_sync_ts') or 0)
+            if now_ts - last_menu_sync >= 3600:
+                ok_menu, _ = tg_set_upgrade_menu(cfg)
+                if ok_menu:
+                    state['tg_menu_sync_ts'] = now_ts
+
+            # 轮询 TG 菜单指令
+            tg_poll_upgrade_commands(cfg, state)
+            save_json(STATE_PATH, state)
+
             if cfg.get('enabled'):
                 self.run_once()
             interval = max(10, int(cfg.get('interval', 120)))
@@ -1918,6 +2006,9 @@ def put_config(cfg: ConfigIn):
     data['web_password_hash'] = str(old.get('web_password_hash') or '')
 
     save_json(CONFIG_PATH, data)
+    # TG开启后立即尝试同步菜单命令
+    if data.get('tg_enabled'):
+        tg_set_upgrade_menu(data)
     log('配置已更新')
     return {'ok': True}
 
@@ -2006,6 +2097,15 @@ def request_upgrade(payload: dict = None):
 def upgrade_status():
     st = load_json(UPGRADE_STATUS_PATH, {'state': 'idle', 'updated_at': None, 'message': '暂无升级任务'})
     return st
+
+
+@app.post('/api/tg/menu_sync')
+def tg_menu_sync():
+    cfg = load_config()
+    ok, msg = tg_set_upgrade_menu(cfg)
+    if ok:
+        return {'ok': True, 'message': 'TG菜单已同步（含 /upgrade）'}
+    return {'ok': False, 'error': msg}
 
 
 @app.post('/api/tg/test')
