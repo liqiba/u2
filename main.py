@@ -28,6 +28,8 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
+UPGRADE_REQUEST_PATH = DATA_DIR / 'upgrade.request.json'
+UPGRADE_STATUS_PATH = DATA_DIR / 'upgrade.status.json'
 APP_LOG = LOG_DIR / 'app.log'
 APP_VERSION = '2026.3.89'
 BASE_DIR = Path(__file__).resolve().parent
@@ -1268,6 +1270,8 @@ def startup_event():
         save_json(CONFIG_PATH, DEFAULT_CONFIG)
     if not STATE_PATH.exists():
         save_json(STATE_PATH, {'last_seen': [], 'last_run': None, 'last_error': None, 'qb_rr_index': 0, 'failed_pushes': []})
+    if not UPGRADE_STATUS_PATH.exists():
+        save_json(UPGRADE_STATUS_PATH, {'state': 'idle', 'updated_at': now_iso(), 'message': '等待升级请求'})
     runner.start()
 
 
@@ -1983,6 +1987,25 @@ def qb_jump(payload: dict):
     if err:
         return {'ok': False, 'error': err}
     return {'ok': True, 'url': qb_url + '/'}
+
+
+@app.post('/api/upgrade/request')
+def request_upgrade(payload: dict = None):
+    p = payload or {}
+    req = {
+        'requested_at': now_iso(),
+        'source': str(p.get('source') or 'web'),
+        'note': str(p.get('note') or ''),
+    }
+    save_json(UPGRADE_REQUEST_PATH, req)
+    log(f"收到升级请求：source={req['source']}")
+    return {'ok': True, 'message': '升级请求已提交，宿主机将异步执行'}
+
+
+@app.get('/api/upgrade/status')
+def upgrade_status():
+    st = load_json(UPGRADE_STATUS_PATH, {'state': 'idle', 'updated_at': None, 'message': '暂无升级任务'})
+    return st
 
 
 @app.post('/api/tg/test')

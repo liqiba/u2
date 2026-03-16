@@ -5,53 +5,102 @@ REPO_DIR="/opt/catch_magic_web"
 LOG_FILE="/opt/catch_magic_web/logs/auto_update.log"
 API_URL="http://127.0.0.1:18088/api/status"
 SERVICE_NAME="catch-magic-web"
+REQUEST_FILE="/opt/catch_magic_web/data/upgrade.request.json"
+STATUS_FILE="/opt/catch_magic_web/data/upgrade.status.json"
+LOCK_FILE="/tmp/catch_magic_update.lock"
+CONFIG_FILE="/opt/catch_magic_web/data/config.json"
 
-mkdir -p "$(dirname "$LOG_FILE")"
+mkdir -p "$(dirname "$LOG_FILE")" "$(dirname "$STATUS_FILE")"
 log(){ echo "[$(date -u +"%Y-%m-%d %H:%M:%S UTC")] $*" >> "$LOG_FILE"; }
+set_status(){
+  local state="$1"; shift
+  local msg="$*"
+  cat > "$STATUS_FILE" <<EOF
+{"state":"${state}","updated_at":"$(date +"%Y-%m-%d %H:%M:%S CST")","message":"${msg//"/\"}"}
+EOF
+}
 
-cd "$REPO_DIR"
+tg_send(){
+  [[ -f "$CONFIG_FILE" ]] || return 0
+  python3 - <<'PY' "$CONFIG_FILE" "$1"
+import json,sys,requests
+cfg_path,text=sys.argv[1],sys.argv[2]
+try:
+    cfg=json.load(open(cfg_path,'r',encoding='utf-8'))
+    if not cfg.get('tg_enabled'): raise SystemExit
+    token=(cfg.get('tg_bot_token') or '').strip()
+    chat=(str(cfg.get('tg_chat_id') or '')).strip()
+    if not token or not chat: raise SystemExit
+    requests.post(f'https://api.telegram.org/bot{token}/sendMessage',json={'chat_id':chat,'text':text},timeout=10)
+except Exception:
+    pass
+PY
+}
 
-# 1) 拉取最新代码（有更新才部署）
-git fetch origin main >/dev/null 2>&1 || { log "git fetch failed"; exit 1; }
-LOCAL_SHA="$(git rev-parse main 2>/dev/null || true)"
-REMOTE_SHA="$(git rev-parse origin/main 2>/dev/null || true)"
+(
+  flock -n 9 || exit 0
 
-if [[ -n "$REMOTE_SHA" && "$LOCAL_SHA" != "$REMOTE_SHA" ]]; then
-  log "new commit detected: $LOCAL_SHA -> $REMOTE_SHA"
-  if git pull --ff-only origin main >/dev/null 2>&1; then
-    log "git pull ok"
-    if docker-compose up -d --build >/dev/null 2>&1; then
-      log "docker-compose up -d --build ok"
-    else
-      log "docker-compose build/deploy failed"
+  cd "$REPO_DIR"
+
+  # 默认健康巡检
+  if [[ ! -f "$REQUEST_FILE" ]]; then
+    sleep 1
+    if curl -fsS "$API_URL" >/dev/null 2>&1; then
+      exit 0
     fi
-  else
-    log "git pull failed"
+    log "health check failed, trying restart"
+    docker-compose restart "$SERVICE_NAME" >/dev/null 2>&1 || true
+    sleep 4
+    if curl -fsS "$API_URL" >/dev/null 2>&1; then
+      log "self-heal by restart ok"
+      exit 0
+    fi
+    log "self-heal failed"
+    exit 1
   fi
-fi
 
-# 2) 健康检查
-sleep 2
-if curl -fsS "$API_URL" >/dev/null 2>&1; then
-  log "health check ok"
-  exit 0
-fi
+  set_status running "收到升级请求，开始执行"
+  log "manual upgrade requested"
+  tg_send "🚀 U2 开始一键升级容器"
 
-log "health check failed, trying self-heal restart"
-docker-compose restart "$SERVICE_NAME" >/dev/null 2>&1 || true
-sleep 4
-if curl -fsS "$API_URL" >/dev/null 2>&1; then
-  log "self-heal by restart ok"
-  exit 0
-fi
+  if ! git fetch origin main >/dev/null 2>&1; then
+    set_status failed "git fetch 失败"
+    tg_send "❌ U2 升级失败：git fetch 失败"
+    rm -f "$REQUEST_FILE"
+    exit 1
+  fi
 
-log "restart failed, trying rebuild"
-docker-compose up -d --build >/dev/null 2>&1 || true
-sleep 5
-if curl -fsS "$API_URL" >/dev/null 2>&1; then
-  log "self-heal by rebuild ok"
-  exit 0
-fi
+  LOCAL_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
+  REMOTE_SHA="$(git rev-parse origin/main 2>/dev/null || true)"
 
-log "self-heal failed, manual check required"
-exit 1
+  if ! git reset --hard origin/main >/dev/null 2>&1; then
+    set_status failed "git reset 失败"
+    tg_send "❌ U2 升级失败：git reset 失败"
+    rm -f "$REQUEST_FILE"
+    exit 1
+  fi
+
+  set_status running "代码已更新，开始重建容器"
+  if ! docker-compose up -d --build >/dev/null 2>&1; then
+    set_status failed "docker-compose 重建失败"
+    tg_send "❌ U2 升级失败：容器重建失败"
+    rm -f "$REQUEST_FILE"
+    exit 1
+  fi
+
+  sleep 4
+  if curl -fsS "$API_URL" >/dev/null 2>&1; then
+    set_status success "升级成功：${LOCAL_SHA:0:7} -> ${REMOTE_SHA:0:7}"
+    log "upgrade success: $LOCAL_SHA -> $REMOTE_SHA"
+    tg_send "✅ U2 升级成功\n版本: ${LOCAL_SHA:0:7} -> ${REMOTE_SHA:0:7}"
+  else
+    set_status failed "升级后健康检查失败"
+    log "upgrade failed: health check failed"
+    tg_send "❌ U2 升级失败：健康检查未通过"
+    rm -f "$REQUEST_FILE"
+    exit 1
+  fi
+
+  rm -f "$REQUEST_FILE"
+
+) 9>"$LOCK_FILE"

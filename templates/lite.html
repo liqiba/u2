@@ -26,6 +26,10 @@
     <section id="cfg-magic" class="card hide"></section>
     <section id="cfg-qb" class="card hide"></section>
     <section id="cfg-auth" class="card hide"></section>
+    <section id="upgrade-box" class="card">
+      <div class="row-between"><h3>一键升级容器</h3><button class="btn" onclick="triggerUpgrade(event)">立即升级</button></div>
+      <div id="upgrade-status" class="k">状态读取中...</div>
+    </section>
     <textarea id="qb-import" class="hide" placeholder="粘贴 qB JSON 数组"></textarea>
     <div id="toast" class="toast hide"></div>
 
@@ -374,6 +378,27 @@ async function queryMagicHistory(ev){
   `);
 }
 
+async function refreshUpgradeStatus(){
+  try{
+    const d = await fetch('/api/upgrade/status').then(r=>r.json());
+    const node = el('upgrade-status');
+    if(!node) return;
+    node.textContent = `状态: ${d.state||'unknown'} | 时间: ${d.updated_at||'-'} | ${d.message||''}`;
+  }catch(e){ }
+}
+
+async function triggerUpgrade(ev){
+  if(!confirm('确认发起容器升级？升级由宿主机异步执行。')) return;
+  setLoading(ev?.target, true);
+  let d={ok:false,error:'请求失败'};
+  try{
+    d=await fetch('/api/upgrade/request',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:'web'})}).then(r=>r.json());
+  }catch(e){ d={ok:false,error:'请求失败'}; }
+  setLoading(ev?.target, false);
+  if(d.ok){ toast('升级请求已提交', true); refreshUpgradeStatus(); }
+  else toast(`提交失败：${d.error||'unknown'}`, false);
+}
+
 async function refreshLogs(force=false){
   try{
     const cursor = force ? 0 : logCursor;
@@ -390,6 +415,8 @@ async function refreshLogs(force=false){
 function startLogLoop(){ if(logTimer) clearInterval(logTimer); refreshLogs(true); logTimer=setInterval(()=>refreshLogs(false), 8000); }
 applyTheme();
 startLogLoop();
+refreshUpgradeStatus();
+setInterval(refreshUpgradeStatus, 5000);
 </script>
 </body>
 </html>
