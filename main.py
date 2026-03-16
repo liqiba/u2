@@ -1,14 +1,24 @@
+import hashlib
+import hmac
 import json
+import re
+import secrets
 import threading
 import time
-from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone, timedelta
+from html import escape
 from pathlib import Path
 from typing import List
 from zoneinfo import ZoneInfo
 
 import requests
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi import FastAPI, Query, Request
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from urllib.parse import urlparse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
 DATA_DIR = Path('/data')
@@ -19,9 +29,13 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = DATA_DIR / 'config.json'
 STATE_PATH = DATA_DIR / 'state.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.52'
+APP_VERSION = '2026.3.89'
+BASE_DIR = Path(__file__).resolve().parent
+TEMPLATES_DIR = BASE_DIR / 'templates'
+STATIC_DIR = BASE_DIR / 'static'
 QB_TORRENT_UP_LIMIT_BYTES = 50 * 1024 * 1024  # default: 50 MB/s per torrent
 LOCAL_TZ = ZoneInfo('Asia/Shanghai')
+SELF_MAGIC_LOCK = threading.Lock()
 
 DEFAULT_CONFIG = {
     'enabled': False,
@@ -37,6 +51,7 @@ DEFAULT_CONFIG = {
     'auto_self_magic_enabled': False,
     'auto_self_magic_min_upload_kib': 1024,
     'auto_self_magic_min_size_gb': 5,
+    'auto_self_magic_max_size_gb': 0,
     'auto_self_magic_hours': 24,
     'auto_self_magic_interval': 60,
     'auto_self_magic_magic_downloading': True,
@@ -50,6 +65,8 @@ DEFAULT_CONFIG = {
     'tg_chat_id': '',
     'tg_notify_new': True,
     'tg_notify_error': True,
+    'web_auth_enabled': False,
+    'web_password_hash': '',
     'qb_clients': [
         {
             'name': 'qb-1',
@@ -63,6 +80,16 @@ DEFAULT_CONFIG = {
         }
     ],
 }
+
+AUTH_COOKIE_NAME = 'u2_auth_sid'
+AUTH_SESSION_TTL_SEC = 7 * 24 * 3600
+AUTH_MAX_FAILS = 5
+AUTH_LOCK_SECONDS = 30 * 60
+AUTH_WINDOW_SECONDS = 15 * 60
+AUTH_FAIL_DELAY_SEC = 1.2
+
+AUTH_SESSIONS = {}
+AUTH_GUARD = {}
 
 
 def now_iso():
@@ -133,6 +160,102 @@ def load_config():
     return merged
 
 
+def _ip_of(req: Request):
+    xff = req.headers.get('x-forwarded-for', '')
+    if xff:
+        return xff.split(',')[0].strip()
+    if req.client and req.client.host:
+        return req.client.host
+    return 'unknown'
+
+
+def _hash_password(password: str):
+    salt = secrets.token_hex(16)
+    rounds = 200000
+    digest = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt.encode('utf-8'), rounds).hex()
+    return f'pbkdf2_sha256${rounds}${salt}${digest}'
+
+
+def _verify_password(password: str, stored: str):
+    try:
+        algo, rounds_s, salt, digest = str(stored or '').split('$', 3)
+        if algo != 'pbkdf2_sha256':
+            return False
+        rounds = int(rounds_s)
+        cand = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt.encode('utf-8'), rounds).hex()
+        return hmac.compare_digest(cand, digest)
+    except Exception:
+        return False
+
+
+def _auth_enabled(cfg: dict):
+    return bool(cfg.get('web_auth_enabled')) and bool(str(cfg.get('web_password_hash') or '').strip())
+
+
+def _guard_info(ip: str):
+    now = int(time.time())
+    g = AUTH_GUARD.get(ip) or {'fails': 0, 'window_start': now, 'lock_until': 0}
+    if now - int(g.get('window_start') or 0) > AUTH_WINDOW_SECONDS:
+        g['fails'] = 0
+        g['window_start'] = now
+    return g
+
+
+def _is_locked(ip: str):
+    now = int(time.time())
+    g = _guard_info(ip)
+    lock_until = int(g.get('lock_until') or 0)
+    if lock_until > now:
+        AUTH_GUARD[ip] = g
+        return True, lock_until - now
+    if lock_until and lock_until <= now:
+        g['lock_until'] = 0
+    AUTH_GUARD[ip] = g
+    return False, 0
+
+
+def _register_login_fail(ip: str):
+    now = int(time.time())
+    g = _guard_info(ip)
+    g['fails'] = int(g.get('fails') or 0) + 1
+    if g['fails'] >= AUTH_MAX_FAILS:
+        g['lock_until'] = now + AUTH_LOCK_SECONDS
+        g['fails'] = 0
+        g['window_start'] = now
+    AUTH_GUARD[ip] = g
+
+
+def _register_login_success(ip: str):
+    AUTH_GUARD.pop(ip, None)
+
+
+def _new_auth_session(ip: str):
+    sid = secrets.token_urlsafe(32)
+    now = int(time.time())
+    AUTH_SESSIONS[sid] = {'created_at': now, 'expire_at': now + AUTH_SESSION_TTL_SEC, 'ip': ip}
+    return sid
+
+
+def _valid_session(sid: str):
+    if not sid:
+        return False
+    now = int(time.time())
+    s = AUTH_SESSIONS.get(sid)
+    if not s:
+        return False
+    if int(s.get('expire_at') or 0) <= now:
+        AUTH_SESSIONS.pop(sid, None)
+        return False
+    return True
+
+
+def _cleanup_auth_sessions():
+    now = int(time.time())
+    expired = [k for k, v in AUTH_SESSIONS.items() if int(v.get('expire_at') or 0) <= now]
+    for k in expired:
+        AUTH_SESSIONS.pop(k, None)
+
+
 def qb_login(client: dict):
     qb_url = (client.get('qb_url') or '').strip().rstrip('/')
     qb_username = (client.get('qb_username') or '').strip()
@@ -173,13 +296,16 @@ def qb_add_torrent(client: dict, torrent_url: str, up_limit_bytes: int = QB_TORR
     return False, f'qB 添加失败: {add_resp.status_code} {add_resp.text[:120]}'
 
 
-def qb_fetch_stats(client: dict):
+def qb_fetch_stats(client: dict, timeout_sec: int = 8):
     name = client.get('name') or client.get('qb_url') or 'unknown'
-    sess, qb_url, err = qb_login(client)
+    try:
+        sess, qb_url, err = qb_login(client)
+    except Exception as e:
+        return {'name': name, 'ok': False, 'error': str(e)}
     if err:
         return {'name': name, 'ok': False, 'error': err}
     try:
-        resp = sess.get(f'{qb_url}/api/v2/sync/maindata', timeout=20)
+        resp = sess.get(f'{qb_url}/api/v2/sync/maindata', timeout=max(3, int(timeout_sec)))
         resp.raise_for_status()
         data = resp.json()
         ss = data.get('server_state', {})
@@ -231,6 +357,40 @@ def add_failed_push(state: dict, item: dict):
     state['failed_pushes'] = arr[-200:]
 
 
+def retry_failed_pushes_once(cfg: dict, state: dict):
+    failed = list(state.get('failed_pushes') or [])
+    if not failed:
+        return {'ok': True, 'retried': 0, 'success': 0, 'remain': 0}
+
+    enabled = [c for c in (cfg.get('qb_clients') or []) if c.get('enabled', True)]
+    healthy, _ = healthy_qb_clients(enabled)
+    targets = healthy if healthy else enabled
+    if not targets:
+        return {'ok': False, 'error': '没有启用的 qB 客户端'}
+
+    remain = []
+    success = 0
+    for it in failed:
+        turl = it.get('torrent_url')
+        upl = int(it.get('up_limit_bytes') or 0)
+        ok_one = False
+        for cli in targets:
+            for _ in range(3):
+                ok, _ = qb_add_torrent(cli, turl, upl)
+                if ok:
+                    ok_one = True
+                    success += 1
+                    break
+                time.sleep(1)
+            if ok_one:
+                break
+        if not ok_one:
+            remain.append(it)
+
+    state['failed_pushes'] = remain[-200:]
+    return {'ok': True, 'retried': len(failed), 'success': success, 'remain': len(remain)}
+
+
 def summarize_error_cn(err: str):
     t = (err or '').lower()
     if '401' in t or 'unauthorized' in t or 'invalid token' in t:
@@ -278,11 +438,273 @@ def u2_tid_by_hash(cfg: dict, _hash: str):
         return None, str(e)
 
 
+def u2_promotion_snapshot(cfg: dict, scope: str, maximum: int = 200):
+    token = (cfg.get('u2_api_token') or '').strip()
+    uid = int(cfg.get('u2_uid') or 0)
+    if not token or not uid:
+        return None, '缺少u2_api_token或u2_uid'
+    try:
+        r = requests.get(
+            'https://u2.kysdm.com/api/v1/promotion',
+            params={'uid': uid, 'token': token, 'scope': scope, 'maximum': int(maximum)},
+            timeout=20,
+        )
+        r.raise_for_status()
+        arr = (r.json().get('data') or {}).get('promotion') or []
+        m = {}
+        for p in arr:
+            if not isinstance(p, dict):
+                continue
+            tid = p.get('torrent_id')
+            if not tid:
+                continue
+            ur = p.get('upload_ratio')
+            dr = p.get('download_ratio')
+            ratio = str(p.get('ratio') or '')
+            if ratio and '/' in ratio:
+                try:
+                    left, right = [x.strip() for x in ratio.split('/', 1)]
+                    ur = float(left)
+                    dr = float(right)
+                except Exception:
+                    pass
+            m[int(tid)] = {'ur': ur, 'dr': dr, 'ratio': ratio}
+        return m, None
+    except Exception as e:
+        return None, str(e)
+
+
+def _ratio_to_float_pair(ratio: str):
+    try:
+        if ratio and '/' in ratio:
+            l, r = [x.strip() for x in str(ratio).split('/', 1)]
+            return float(l), float(r)
+    except Exception:
+        pass
+    return None, None
+
+
+def _parse_uc_cost(text: str):
+    if not text:
+        return None
+
+    # U2 test接口常见格式：{"status":"operational","price":"<span ... title=\"1,598.00\">..."}
+    # 先匹配 钻/金/银/铜（1钻=100金=10000银）
+    m_ggsc = re.search(
+        r'ucoin-gem[^>]*>\s*([0-9]+)\s*<.*?ucoin-gold[^>]*>\s*([0-9]+)\s*<.*?ucoin-silver[^>]*>\s*([0-9]+)\s*<.*?ucoin-copper[^>]*>\s*([0-9]{1,2})\s*<',
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if m_ggsc:
+        try:
+            gem = int(m_ggsc.group(1))
+            gold = int(m_ggsc.group(2))
+            silver = int(m_ggsc.group(3))
+            copper = int(m_ggsc.group(4))
+            total_silver = gem * 10000 + gold * 100 + silver + copper / 100.0
+            return float(f'{total_silver:.2f}')
+        except Exception:
+            pass
+
+    # 再匹配 金/银/铜
+    m_gsc = re.search(
+        r'ucoin-gold[^>]*>\s*([0-9]+)\s*<.*?ucoin-silver[^>]*>\s*([0-9]+)\s*<.*?ucoin-copper[^>]*>\s*([0-9]{1,2})\s*<',
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if m_gsc:
+        try:
+            gold = int(m_gsc.group(1))
+            silver = int(m_gsc.group(2))
+            copper = int(m_gsc.group(3))
+            total_silver = gold * 100 + silver + copper / 100.0
+            return float(f'{total_silver:.2f}')
+        except Exception:
+            pass
+
+    m_sc = re.search(r'ucoin-silver[^>]*>\s*([0-9]+)\s*<.*?ucoin-copper[^>]*>\s*([0-9]{1,2})\s*<', text, re.IGNORECASE | re.DOTALL)
+    if m_sc:
+        try:
+            silver = int(m_sc.group(1))
+            copper = int(m_sc.group(2))
+            return float(f'{silver}.{copper:02d}')
+        except Exception:
+            pass
+
+    m_title = re.search(r'title\s*=\s*[\"\']([0-9][0-9,，]*(?:\.[0-9]+)?)[\"\']', text, re.IGNORECASE)
+    if m_title:
+        try:
+            return float(m_title.group(1).replace(',', '').replace('，', ''))
+        except Exception:
+            pass
+
+    patterns = [
+        r'([0-9][0-9,，]*(?:\.[0-9]+)?)\s*(?:UC|UCoin|论坛币|魔力|魔力值)',
+        r'(?:花费|消耗|扣除)[^0-9]{0,20}([0-9][0-9,，]*(?:\.[0-9]+)?)',
+        r'cost[^0-9]{0,10}([0-9][0-9,，]*(?:\.[0-9]+)?)',
+    ]
+    for pat in patterns:
+        m = re.search(pat, text, re.IGNORECASE)
+        if not m:
+            continue
+        try:
+            return float(m.group(1).replace(',', '').replace('，', ''))
+        except Exception:
+            continue
+    return None
+
+
+def _magic_day_key():
+    return datetime.now(LOCAL_TZ).strftime('%Y-%m-%d')
+
+
+def _uc_parts(uc: float):
+    try:
+        total_copper = int(round(float(uc) * 100))
+    except Exception:
+        total_copper = 0
+    silver_total = total_copper // 100
+    copper = total_copper % 100
+    gold_total = silver_total // 100
+    silver = silver_total % 100
+    gem = gold_total // 100
+    gold = gold_total % 100
+    return {'gem': int(gem), 'gold': int(gold), 'silver': int(silver), 'copper': int(copper)}
+
+
+def _uc_to_copper_value(uc: float):
+    # 展示用：统一换算为“铜币”数值（保留2位）
+    return float(f"{float(uc) * 100:.2f}")
+
+
+def _format_uc_cn(uc: float):
+    p = _uc_parts(uc)
+    return f"{p['gem']}钻{p['gold']}金{p['silver']}银{p['copper']:02d}铜"
+
+
+def _parse_cst_time(s: str):
+    try:
+        return datetime.strptime(s, '%Y-%m-%d %H:%M:%S CST')
+    except Exception:
+        return None
+
+
+def _fetch_ucoin_magic_entries(cfg: dict, max_pages: int = 3):
+    cookie = (cfg.get('u2_cookie') or '').strip()
+    uid = int(cfg.get('u2_uid') or 0)
+    if not cookie or not uid:
+        return [], '缺少u2_cookie或u2_uid'
+
+    entries = []
+    seen = set()
+    ck = {'nexusphp_u2': cookie}
+
+    for p in range(1, max_pages + 1):
+        url = f'https://u2.dmhy.org/ucoin.php?id={uid}&log=1&page={p}'
+        try:
+            r = requests.get(url, cookies=ck, timeout=25)
+            r.raise_for_status()
+            html = r.text or ''
+        except Exception as e:
+            return entries, str(e)
+
+        rows = re.findall(r'<tr[^>]*>(.*?)</tr>', html, re.IGNORECASE | re.DOTALL)
+        found_in_page = 0
+        for row in rows:
+            m_tid = re.search(r'Magic\s*-\s*ID\s*(\d+),\s*Torrent\s*(\d+)', row, re.IGNORECASE)
+            if not m_tid:
+                continue
+            m_time = re.search(r'<time[^>]*title="([0-9\-: ]+)"', row, re.IGNORECASE)
+            if not m_time:
+                continue
+            t_forum = m_time.group(1).strip()
+            dt = _parse_cst_time(t_forum + ' CST')
+            if not dt:
+                continue
+
+            mge = re.search(r'ucoin-symbol\s+ucoin-gem">\s*([0-9]+)\s*<', row, re.IGNORECASE)
+            mg = re.search(r'ucoin-symbol\s+ucoin-gold">\s*([0-9]+)\s*<', row, re.IGNORECASE)
+            ms = re.search(r'ucoin-symbol\s+ucoin-silver">\s*([0-9]+)\s*<', row, re.IGNORECASE)
+            mc = re.search(r'ucoin-symbol\s+ucoin-copper">\s*([0-9]+)\s*<', row, re.IGNORECASE)
+            gem = int(mge.group(1)) if mge else 0
+            gold = int(mg.group(1)) if mg else 0
+            silver = int(ms.group(1)) if ms else 0
+            copper = int(mc.group(1)) if mc else 0
+            uc = float(f"{gem * 10000 + gold * 100 + silver + copper / 100.0:.2f}")
+            pid = int(m_tid.group(1))
+            tid = int(m_tid.group(2))
+
+            key = (t_forum, pid, tid, gem, gold, silver, copper)
+            if key in seen:
+                continue
+            seen.add(key)
+            entries.append({
+                'time': t_forum + ' CST',
+                'dt': dt,
+                'pid': pid,
+                'tid': tid,
+                'uc': uc,
+                'ucParts': {'gem': gem, 'gold': gold, 'silver': silver, 'copper': copper},
+            })
+            found_in_page += 1
+
+        if found_in_page == 0:
+            break
+
+    return entries, None
+
+
+def verify_self_magic_effective(cfg: dict, tid: int, retries: int = 3, delay_sec: int = 2):
+    token = (cfg.get('u2_api_token') or '').strip()
+    uid = int(cfg.get('u2_uid') or 0)
+    if not token or not uid:
+        return False, '缺少u2_api_token或u2_uid，无法校验生效状态'
+
+    last_seen = []
+    for i in range(max(1, retries)):
+        try:
+            r = requests.get(
+                'https://u2.kysdm.com/api/v1/promotion',
+                params={'uid': uid, 'token': token, 'scope': 'all', 'maximum': 300},
+                timeout=20,
+            )
+            r.raise_for_status()
+            arr = (r.json().get('data') or {}).get('promotion') or []
+            matched = []
+            for p in arr:
+                if int(p.get('torrent_id') or 0) != int(tid):
+                    continue
+                for_uid_raw = p.get('for_user_id')
+                try:
+                    for_uid = int(for_uid_raw) if for_uid_raw not in (None, '', 0, '0') else 0
+                except Exception:
+                    for_uid = 0
+                ur, dr = _ratio_to_float_pair(p.get('ratio') or '')
+                status = int(p.get('status') or 0)
+                matched.append({'for_uid': for_uid, 'ratio': p.get('ratio'), 'status': status})
+                # 兼容 U2 接口偶发 for_user_id 缺失/为0 的情况：
+                # 只要同一 tid 已存在有效 2.33x/1x（或更高上传倍率）魔法，就视为已生效，避免重复施法。
+                if ur is not None and dr is not None and ur >= 2.3 and abs(dr - 1.0) < 1e-6 and status == 1:
+                    return True, 'ok'
+            last_seen = matched
+        except Exception as e:
+            last_seen = [f'query_error:{e}']
+        if i < retries - 1:
+            time.sleep(max(1, int(delay_sec)))
+    return False, f'未确认生效，tid={tid}，查询到={last_seen[:4]}'
+
+
 def u2_send_self_magic(cfg: dict, tid: int):
     cookie = (cfg.get('u2_cookie') or '').strip()
     hours = int(cfg.get('auto_self_magic_hours') or 24)
     if not cookie:
-        return False, '缺少u2_cookie'
+        return False, '缺少u2_cookie', None
+
+    # 提交前先查一次：若已存在有效 2.33x/1x 自放魔法，直接跳过，避免重复施法。
+    already_ok, _ = verify_self_magic_effective(cfg, int(tid), retries=1, delay_sec=1)
+    if already_ok:
+        return True, 'already_effective', None
+
     data = {
         'action': 'magic', 'divergence': '', 'base_everyone': '', 'base_self': '', 'base_other': '',
         'torrent': tid, 'tsize': '', 'ttl': '', 'user_other': '', 'start': 0, 'promotion': 8,
@@ -290,16 +712,28 @@ def u2_send_self_magic(cfg: dict, tid: int):
     }
     ck = {'nexusphp_u2': cookie}
     try:
+        # 先校验 cookie 是否有效（无效会返回 Access Point 登录页）
+        chk = requests.get('https://u2.dmhy.org/', cookies=ck, timeout=20)
+        txt_chk = chk.text or ''
+        if ('Access Point :: U2' in txt_chk) or ('login.php' in txt_chk and 'logout.php' not in txt_chk):
+            return False, 'u2_cookie 无效或已过期，请更新 cookie', None
+
         t = requests.post('https://u2.dmhy.org/promotion.php?test=1', data=data, cookies=ck, timeout=20)
         if t.status_code >= 300:
-            return False, f'测试失败:{t.status_code}'
+            return False, f'测试失败:{t.status_code}', None
+        uc_cost = _parse_uc_cost(t.text or '')
+
         r = requests.post('https://u2.dmhy.org/promotion.php', data=data, cookies=ck, timeout=20)
-        txt = r.text or ''
-        if r.status_code < 300 and ('<script' in txt or 'location.href' in txt):
-            return True, 'ok'
-        return False, f'提交失败:{r.status_code}'
+        if r.status_code >= 300:
+            return False, f'提交失败:{r.status_code}', uc_cost
+        if uc_cost is None:
+            uc_cost = _parse_uc_cost(r.text or '')
+        ok, msg = verify_self_magic_effective(cfg, int(tid), retries=4, delay_sec=2)
+        if ok:
+            return True, 'ok', uc_cost
+        return False, f'提交后校验未生效：{msg}', uc_cost
     except Exception as e:
-        return False, str(e)
+        return False, str(e), None
 
 
 def auto_self_magic_once(cfg: dict, state: dict, force: bool = False):
@@ -315,6 +749,8 @@ def auto_self_magic_once(cfg: dict, state: dict, force: bool = False):
 
     min_up = int(cfg.get('auto_self_magic_min_upload_kib') or 1024) * 1024
     min_size = int(cfg.get('auto_self_magic_min_size_gb') or 5) * 1024 * 1024 * 1024
+    max_size_cfg = max(0, int(cfg.get('auto_self_magic_max_size_gb') or 0))
+    max_size = max_size_cfg * 1024 * 1024 * 1024 if max_size_cfg > 0 else 0
     min_days = max(0, int(cfg.get('auto_self_magic_min_d') or 0))
     allow_downloading = bool(cfg.get('auto_self_magic_magic_downloading', True))
 
@@ -340,6 +776,8 @@ def auto_self_magic_once(cfg: dict, state: dict, force: bool = False):
                 continue
             if size < min_size:
                 continue
+            if max_size > 0 and size > max_size:
+                continue
             if (not allow_downloading) and prog < 1.0:
                 continue
             if min_days > 0 and added_on > 0 and (now - added_on) < min_days * 86400:
@@ -351,30 +789,100 @@ def auto_self_magic_once(cfg: dict, state: dict, force: bool = False):
         return {'ok': True, 'done': 0, 'msg': '无候选种子'}
 
     recent = dict(state.get('self_magic_recent') or {})
+    recent_tid = dict(state.get('self_magic_recent_tid') or {})
     now = int(time.time())
     done = 0
+    sent_tid_in_run = set()
+    stat = {'nohash': 0, 'cooldown_hash': 0, 'tid_lookup_fail': 0, 'dup_tid': 0, 'cooldown_tid': 0, 'daily_limit_tid': 0, 'submit_fail': 0}
+    day = _magic_day_key()
+    uc_total = float(state.get('self_magic_uc_total') or 0.0)
+    uc_by_day = dict(state.get('self_magic_uc_by_day') or {})
+    fail_total = int(state.get('self_magic_fail_total') or 0)
+    fail_by_day = dict(state.get('self_magic_fail_by_day') or {})
+    daily_limit_total = int(state.get('self_magic_daily_limit_total') or 0)
+    daily_limit_by_day = dict(state.get('self_magic_daily_limit_by_day') or {})
+    # 硬限制：当天同 tid 最大施法次数=1（含“提交后校验未命中”这种防重冷却场景）
+    daily_tid_sent = dict(state.get('self_magic_daily_tid_sent') or {})
+    daily_for_today = set(str(x) for x in (daily_tid_sent.get(day) or []))
     for t in candidates[:20]:
         h = t['hash']
         if not h:
+            stat['nohash'] += 1
             continue
         ts = int(recent.get(h) or 0)
         if now - ts < 20 * 3600:
+            stat['cooldown_hash'] += 1
             continue
         tid, err = u2_tid_by_hash(cfg, h)
         if err or not tid:
+            stat['tid_lookup_fail'] += 1
             log(f'自放魔法：hash={h[:8]} 查tid失败：{err}')
             continue
-        ok, msg = u2_send_self_magic(cfg, int(tid))
+        tid = int(tid)
+        if tid in sent_tid_in_run:
+            stat['dup_tid'] += 1
+            log(f'自放魔法：tid={tid} 本轮已处理，跳过重复hash={h[:8]}')
+            continue
+        ts_tid = int(recent_tid.get(str(tid)) or 0)
+        if now - ts_tid < 20 * 3600:
+            stat['cooldown_tid'] += 1
+            log(f'自放魔法：tid={tid} 冷却中，跳过hash={h[:8]}')
+            continue
+        if str(tid) in daily_for_today:
+            stat['cooldown_tid'] += 1
+            stat['daily_limit_tid'] += 1
+            log(f'自放魔法：tid={tid} 今日已施法，跳过hash={h[:8]}')
+            continue
+        ok, msg, uc_cost = u2_send_self_magic(cfg, tid)
         if ok:
             recent[h] = now
+            recent_tid[str(tid)] = now
+            sent_tid_in_run.add(tid)
+            daily_for_today.add(str(tid))
             done += 1
-            log(f'自放魔法成功：tid={tid}，hash={h[:8]}')
+            if uc_cost is not None:
+                uc_total += float(uc_cost)
+                uc_by_day[day] = float(uc_by_day.get(day) or 0.0) + float(uc_cost)
+                log(f'自放魔法成功：tid={tid}，hash={h[:8]}，UC={float(uc_cost):.2f}（{_format_uc_cn(float(uc_cost))}）')
+            else:
+                log(f'自放魔法成功：tid={tid}，hash={h[:8]}')
         else:
-            log(f'自放魔法失败：tid={tid}，原因={msg}')
+            # 提交已成功但“生效校验”未及时看到时，给tid加冷却，避免短时间重复施法
+            if str(msg).startswith('提交后校验未生效'):
+                recent[h] = now
+                recent_tid[str(tid)] = now
+                sent_tid_in_run.add(tid)
+                daily_for_today.add(str(tid))
+                log(f'自放魔法：tid={tid} 提交成功但校验未命中，已进入冷却防重（{msg}）')
+            else:
+                stat['submit_fail'] += 1
+                fail_total += 1
+                fail_by_day[day] = int(fail_by_day.get(day) or 0) + 1
+
+    # 仅保留近7天的日记录，避免状态无限增长
+    daily_tid_sent[day] = sorted(daily_for_today, key=lambda x: int(x) if str(x).isdigit() else str(x))
+    try:
+        keep_days = set((datetime.now(LOCAL_TZ) - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(7))
+        daily_tid_sent = {k: v for k, v in daily_tid_sent.items() if k in keep_days}
+    except Exception:
+        pass
 
     state['self_magic_recent'] = recent
+    state['self_magic_recent_tid'] = recent_tid
+    state['self_magic_daily_tid_sent'] = daily_tid_sent
     state['self_magic_last_ts'] = now
-    return {'ok': True, 'done': done, 'msg': f'处理{len(candidates)}，成功{done}'}
+    if stat.get('daily_limit_tid'):
+        daily_limit_total += int(stat.get('daily_limit_tid') or 0)
+        daily_limit_by_day[day] = int(daily_limit_by_day.get(day) or 0) + int(stat.get('daily_limit_tid') or 0)
+
+    state['self_magic_uc_total'] = uc_total
+    state['self_magic_uc_by_day'] = uc_by_day
+    state['self_magic_fail_total'] = fail_total
+    state['self_magic_fail_by_day'] = fail_by_day
+    state['self_magic_daily_limit_total'] = daily_limit_total
+    state['self_magic_daily_limit_by_day'] = daily_limit_by_day
+    msg = f"处理{len(candidates)}，成功{done}，失败{stat['submit_fail']}，冷却(hash/tid)={stat['cooldown_hash']}/{stat['cooldown_tid']}，日限跳过={stat['daily_limit_tid']}，查tid失败={stat['tid_lookup_fail']}"
+    return {'ok': True, 'done': done, 'msg': msg, 'stat': stat}
 
 
 class Runner:
@@ -426,21 +934,76 @@ class Runner:
             url = f"{cfg.get('u2_api_base').rstrip('/')}/promotions"
             params = {'scope': cfg.get('scope', 'public'), 'limit': int(cfg.get('limit', 20))}
             headers = {'Authorization': f'Bearer {token}'}
-            resp = requests.get(url, headers=headers, params=params, timeout=30)
-            resp.raise_for_status()
-            payload = resp.json()
-            raw_data = payload.get('data', [])
-            if isinstance(raw_data, dict):
-                if isinstance(raw_data.get('promotion'), list):
-                    data = raw_data.get('promotion')
-                elif isinstance(raw_data.get('items'), list):
-                    data = raw_data.get('items')
-                else:
-                    data = []
-            elif isinstance(raw_data, list):
-                data = raw_data
+            now_ts = int(time.time())
+            v2_fail_count = int(state.get('v2_fail_count') or 0)
+            v2_cooldown_until = int(state.get('v2_cooldown_until') or 0)
+            use_v2 = now_ts >= v2_cooldown_until
+            if not use_v2:
+                left = v2_cooldown_until - now_ts
+                log(f'v2处于冷却中，剩余{left}s，直接使用v1')
+
+            if use_v2:
+                try:
+                    resp = requests.get(url, headers=headers, params=params, timeout=30)
+                    resp.raise_for_status()
+                    payload = resp.json()
+                    raw_data = payload.get('data', [])
+                    if isinstance(raw_data, dict):
+                        if isinstance(raw_data.get('promotion'), list):
+                            data = raw_data.get('promotion')
+                        elif isinstance(raw_data.get('items'), list):
+                            data = raw_data.get('items')
+                        else:
+                            data = []
+                    elif isinstance(raw_data, list):
+                        data = raw_data
+                    else:
+                        data = []
+                    if v2_fail_count > 0 or v2_cooldown_until > 0:
+                        log('v2恢复可用，清空失败计数/冷却')
+                    state['v2_fail_count'] = 0
+                    state['v2_cooldown_until'] = 0
+                except Exception as e_v2:
+                    v2_fail_count += 1
+                    state['v2_fail_count'] = v2_fail_count
+                    # 连续3次失败，进入1小时冷却
+                    if v2_fail_count >= 3:
+                        state['v2_cooldown_until'] = now_ts + 3600
+                        log(f'v2连续失败{v2_fail_count}次，进入3600s冷却')
+                    uid = int(cfg.get('u2_uid') or 0)
+                    if uid <= 0:
+                        raise
+                    r1 = requests.get(
+                        'https://u2.kysdm.com/api/v1/promotion',
+                        params={
+                            'uid': uid,
+                            'token': token,
+                            'scope': cfg.get('scope', 'public'),
+                            'maximum': int(cfg.get('limit', 20)),
+                        },
+                        timeout=30,
+                    )
+                    r1.raise_for_status()
+                    p1 = r1.json()
+                    data = ((p1.get('data') or {}).get('promotion') or [])
+                    log(f'v2 promotions失败，已回退v1：{e_v2}')
             else:
-                data = []
+                uid = int(cfg.get('u2_uid') or 0)
+                if uid <= 0:
+                    raise RuntimeError('v2冷却中且缺少u2_uid，无法回退v1')
+                r1 = requests.get(
+                    'https://u2.kysdm.com/api/v1/promotion',
+                    params={
+                        'uid': uid,
+                        'token': token,
+                        'scope': cfg.get('scope', 'public'),
+                        'maximum': int(cfg.get('limit', 20)),
+                    },
+                    timeout=30,
+                )
+                r1.raise_for_status()
+                p1 = r1.json()
+                data = ((p1.get('data') or {}).get('promotion') or [])
 
             # 兜底：过滤非对象项，避免结构变化导致报错
             data = [x for x in data if isinstance(x, dict)]
@@ -455,9 +1018,22 @@ class Runner:
             passkey = (cfg.get('u2_passkey') or '').strip()
             up_limit_mb = int(cfg.get('qb_up_limit_mb', 50) or 0)
             up_limit_bytes = max(0, up_limit_mb) * 1024 * 1024
+            promo_snapshot = None
+            promo_snapshot_err = None
+            uid_self = int(cfg.get('u2_uid') or 0)
             for p in new_items:
                 pid = p.get('promotion_id') or p.get('id')
                 tid = p.get('torrent_id')
+                # 私人魔法过滤：只接受公共魔法或明确发给自己的私人魔法
+                for_uid_raw = p.get('for_user_id')
+                try:
+                    for_uid = int(for_uid_raw) if for_uid_raw not in (None, '', 0, '0') else 0
+                except Exception:
+                    for_uid = 0
+                if for_uid and uid_self and for_uid != uid_self:
+                    log(f'跳过非本人私人魔法：ID={pid}，TID={tid}，for_user_id={for_uid}')
+                    continue
+
                 dr = p.get('download_ratio')
                 ur = p.get('upload_ratio')
                 ratio_txt = str(p.get('ratio') or '').strip()
@@ -508,6 +1084,24 @@ class Runner:
                 if not tid:
                     log(f'跳过推送到 qB：推广号={pid} 缺少线程号')
                     continue
+                # 二次校验：推送前按实时promotion快照再确认是否free，避免列表时点差异导致非free误下
+                if (not cfg.get('require_2x_free', True)) and (not cfg.get('download_non_free', False)):
+                    if promo_snapshot is None and promo_snapshot_err is None:
+                        promo_snapshot, promo_snapshot_err = u2_promotion_snapshot(
+                            cfg,
+                            str(cfg.get('scope', 'public')),
+                            max(100, int(cfg.get('limit', 20)) * 4),
+                        )
+                        if promo_snapshot_err:
+                            log(f'二次校验快照失败：{promo_snapshot_err}，本轮按一次判定继续')
+                    if promo_snapshot:
+                        v = promo_snapshot.get(int(tid))
+                        dr2 = None if not v else v.get('dr')
+                        is_free_2nd = str(dr2) in ('0', '0.0') or dr2 in (0, 0.0)
+                        if not is_free_2nd:
+                            ratio2 = v.get('ratio') if v else 'N/A'
+                            log(f'二次校验非Free，已跳过：ID={pid}，TID={tid}，ratio={ratio2}')
+                            continue
                 if not passkey:
                     log('跳过推送到 qB：u2_passkey 未配置')
                     continue
@@ -519,18 +1113,19 @@ class Runner:
 
                 healthy, bad = healthy_qb_clients(targets)
                 if bad:
-                    log(f'以下 qB 不可用，已跳过：{",".join(bad)}')
-                if not healthy:
-                    log('本次无可用 qB 客户端，推送已跳过')
-                    continue
+                    log(f'以下 qB 探测不可用（推送阶段仍会尝试重连）：{",".join(bad)}')
 
                 torrent_url = f'https://u2.dmhy.org/download.php?id={tid}&passkey={passkey}&https=1'
-                for cli in healthy:
+                # 连通性可能瞬时抖动：即使探测失败，也对目标客户端做实际推送重试，避免“探测失败即丢单”。
+                push_targets = healthy if healthy else targets
+                any_ok = False
+                for cli in push_targets:
                     cname = cli.get('name') or cli.get('qb_url') or 'unknown'
                     ok, msg = False, '未知错误'
                     for attempt in range(1, 4):
                         ok, msg = qb_add_torrent(cli, torrent_url, up_limit_bytes)
                         if ok:
+                            any_ok = True
                             if attempt > 1:
                                 log(f'已重试成功：qB[{cname}]，第{attempt}次')
                             break
@@ -541,17 +1136,39 @@ class Runner:
                         log(f'已推送至 qB[{cname}]：推广号={pid}，线程号={tid}，上传限制={up_limit_bytes}B/s')
                     else:
                         log(f'推送到 qB[{cname}] 失败：推广号={pid}，线程号={tid}，原因={msg}')
-                        add_failed_push(state, {
-                            'promotion_id': pid,
-                            'torrent_id': tid,
-                            'torrent_url': torrent_url,
-                            'up_limit_bytes': up_limit_bytes,
-                            'qb_name': cname,
-                            'time': now_iso(),
-                        })
 
-            # 自放魔法（可选）
-            auto_self_magic_once(cfg, state)
+                # 所有目标都失败：放入失败队列，下一轮可重推，避免瞬时网络抖动导致丢单。
+                if not any_ok:
+                    if not healthy:
+                        log('本次 qB 探测均失败，已做直连重试仍未成功，已加入失败重推队列')
+                    add_failed_push(state, {
+                        'promotion_id': pid,
+                        'torrent_id': tid,
+                        'torrent_url': torrent_url,
+                        'up_limit_bytes': up_limit_bytes,
+                        'qb_name': ','.join((c.get('name') or c.get('qb_url') or 'unknown') for c in push_targets),
+                        'time': now_iso(),
+                    })
+
+            # 自放魔法（可选，串行防重入）
+            if SELF_MAGIC_LOCK.acquire(blocking=False):
+                try:
+                    auto_self_magic_once(cfg, state)
+                finally:
+                    SELF_MAGIC_LOCK.release()
+            else:
+                log('自放魔法：已有任务执行中，跳过本轮')
+
+            # 失败推送自动重试：每10分钟触发一次
+            now_ts2 = int(time.time())
+            last_retry_ts = int(state.get('failed_retry_last_ts') or 0)
+            if now_ts2 - last_retry_ts >= 600:
+                rr = retry_failed_pushes_once(cfg, state)
+                state['failed_retry_last_ts'] = now_ts2
+                if rr.get('ok') and int(rr.get('retried') or 0) > 0:
+                    log(f"失败重推(自动10分钟)：重试={rr.get('retried', 0)}，成功={rr.get('success', 0)}，剩余={rr.get('remain', 0)}")
+                elif not rr.get('ok'):
+                    log(f"失败重推(自动10分钟)跳过：{rr.get('error')}")
 
             state['last_seen'] = [str((p.get('promotion_id') or p.get('id'))) for p in data if (p.get('promotion_id') or p.get('id'))][:200]
             state['last_run'] = now_iso()
@@ -574,7 +1191,32 @@ class Runner:
 
 
 app = FastAPI(title='Catch Magic Web')
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+if STATIC_DIR.exists():
+    app.mount('/static', StaticFiles(directory=str(STATIC_DIR)), name='static')
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 runner = Runner()
+
+
+@app.middleware('http')
+async def auth_middleware(request: Request, call_next):
+    path = request.url.path or '/'
+    allow = (
+        path.startswith('/static/')
+        or path in ('/login', '/auth/login', '/api/version')
+    )
+
+    _cleanup_auth_sessions()
+    cfg = load_config()
+    if _auth_enabled(cfg) and not allow:
+        sid = request.cookies.get(AUTH_COOKIE_NAME, '')
+        if not _valid_session(sid):
+            if path.startswith('/api/'):
+                return JSONResponse({'ok': False, 'error': '未登录或登录已过期'}, status_code=401)
+            return RedirectResponse(url='/login', status_code=302)
+
+    resp = await call_next(request)
+    return resp
 
 
 class QBClientIn(BaseModel):
@@ -602,6 +1244,7 @@ class ConfigIn(BaseModel):
     auto_self_magic_enabled: bool = False
     auto_self_magic_min_upload_kib: int = 1024
     auto_self_magic_min_size_gb: int = 5
+    auto_self_magic_max_size_gb: int = 0
     auto_self_magic_hours: int = 24
     auto_self_magic_interval: int = 60
     auto_self_magic_magic_downloading: bool = True
@@ -632,8 +1275,190 @@ def shutdown_event():
     runner.stop()
 
 
+def _human_speed(n: int):
+    n = max(0, int(n or 0))
+    units = ['B/s', 'KB/s', 'MB/s', 'GB/s', 'TB/s']
+    v = float(n)
+    i = 0
+    while v >= 1024 and i < len(units) - 1:
+        v /= 1024
+        i += 1
+    if i <= 1:
+        return f"{v:.0f} {units[i]}"
+    return f"{v:.2f} {units[i]}"
+
+
+def _status_summary_html():
+    cfg = load_config()
+    st = load_json(STATE_PATH, {'last_seen': [], 'last_run': None, 'last_error': None, 'qb_rr_index': 0, 'failed_pushes': []})
+    err = summarize_error_cn(st.get('last_error') or '') if st.get('last_error') else '无'
+    run_state = '执行中' if runner._running else '空闲'
+    return f"""
+    <div class='grid grid-3'>
+      <div class='card'><div class='k'>最后执行</div><div class='v'>{escape(str(st.get('last_run') or '-'))}</div></div>
+      <div class='card'><div class='k'>运行状态</div><div class='v'>{run_state}</div></div>
+      <div class='card'><div class='k'>最近报错</div><div class='v'>{escape(err if cfg.get('enabled') else '已暂停（未运行）')}</div></div>
+    </div>
+    """
+
+
+def _qb_modules_html():
+    cfg = load_config()
+    clients = cfg.get('qb_clients') or []
+    if not clients:
+        return "<div class='card'>暂无 qB 配置</div>"
+    stats = [None] * len(clients)
+    with ThreadPoolExecutor(max_workers=min(8, len(clients))) as ex:
+        fm = {ex.submit(qb_fetch_stats, c, 6): i for i, c in enumerate(clients)}
+        for fut in as_completed(fm):
+            i = fm[fut]
+            try:
+                stats[i] = fut.result()
+            except Exception as e:
+                name = clients[i].get('name') or clients[i].get('qb_url') or 'unknown'
+                stats[i] = {'name': name, 'ok': False, 'error': str(e)}
+    arr = []
+    for it in stats:
+        ok = bool(it.get('ok'))
+        status = '在线' if ok else '离线'
+        qb_url = str(it.get('qb_url') or '').strip()
+        open_attr = f" onclick=\"window.open('{escape(qb_url)}','_blank','noopener')\" style='cursor:pointer'" if qb_url else ''
+        arr.append(f"""
+        <div class='card card-link'{open_attr}>
+          <div class='row'><b>{escape(str(it.get('name') or 'unknown'))}</b><span class='{ 'ok' if ok else 'err' }'>{status}</span></div>
+          <div class='k'>任务 {it.get('task_count','-')} · ↓ {_human_speed(it.get('dl_speed',0))} · ↑ {_human_speed(it.get('up_speed',0))}</div>
+          <div class='k'>总下载 {_human_speed(it.get('dl_total',0)).replace('/s','')} · 总上传 {_human_speed(it.get('up_total',0)).replace('/s','')}</div>
+        </div>
+        """)
+    return "<div class='grid grid-2'>" + ''.join(arr) + "</div>"
+
+
+@app.get('/lite', response_class=HTMLResponse)
+def lite(request: Request):
+    return templates.TemplateResponse('lite.html', {'request': request, 'version': APP_VERSION})
+
+
+@app.get('/partials/status', response_class=HTMLResponse)
+def partial_status():
+    return _status_summary_html()
+
+
+@app.get('/partials/qb', response_class=HTMLResponse)
+def partial_qb():
+    return _qb_modules_html()
+
+
+@app.get('/partials/logs', response_class=HTMLResponse)
+def partial_logs(limit: int = Query(120, ge=20, le=300)):
+    return '<pre class="log">' + escape('\n'.join(tail_lines(APP_LOG, limit))) + '</pre>'
+
+
 @app.get('/', response_class=HTMLResponse)
-def index():
+def index(request: Request):
+    return templates.TemplateResponse('lite.html', {'request': request, 'version': APP_VERSION})
+
+
+@app.get('/login', response_class=HTMLResponse)
+def login_page(request: Request):
+    cfg = load_config()
+    if not _auth_enabled(cfg):
+        return RedirectResponse(url='/', status_code=302)
+    html = f"""
+<!doctype html>
+<html>
+<head>
+  <meta charset='utf-8'>
+  <meta name='viewport' content='width=device-width,initial-scale=1'>
+  <title>登录 - Catch Magic</title>
+  <style>
+    body{{font-family:Arial,sans-serif;background:#0f172a;color:#e2e8f0;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}}
+    .card{{width:min(420px,92vw);background:#111827;border:1px solid #334155;border-radius:12px;padding:18px}}
+    input{{width:100%;padding:10px;border-radius:8px;border:1px solid #475569;background:#0b1220;color:#fff}}
+    button{{margin-top:10px;width:100%;padding:10px;border:0;border-radius:8px;background:#2563eb;color:#fff;font-weight:600;cursor:pointer}}
+    .tip{{font-size:12px;color:#94a3b8;margin-top:8px}}
+  </style>
+</head>
+<body>
+  <div class='card'>
+    <h3 style='margin-top:0'>访问密码验证</h3>
+    <form method='post' action='/auth/login'>
+      <input type='password' name='password' placeholder='请输入访问密码' required />
+      <button type='submit'>登录</button>
+    </form>
+    <div class='tip'>已启用访问保护。连续输错将临时锁定，防止暴力破解。</div>
+  </div>
+</body>
+</html>
+"""
+    return HTMLResponse(content=html)
+
+
+@app.post('/auth/login')
+async def auth_login(request: Request):
+    cfg = load_config()
+    if not _auth_enabled(cfg):
+        return {'ok': True, 'message': '未启用访问密码'}
+
+    ip = _ip_of(request)
+    locked, wait_sec = _is_locked(ip)
+    if locked:
+        return JSONResponse({'ok': False, 'error': f'尝试过多，请 {wait_sec}s 后再试'}, status_code=429)
+
+    form = await request.form()
+    password = str(form.get('password') or '').strip()
+    ok = _verify_password(password, str(cfg.get('web_password_hash') or ''))
+    if not ok:
+        _register_login_fail(ip)
+        time.sleep(AUTH_FAIL_DELAY_SEC)
+        return JSONResponse({'ok': False, 'error': '密码错误'}, status_code=401)
+
+    _register_login_success(ip)
+    sid = _new_auth_session(ip)
+    resp = RedirectResponse(url='/', status_code=302)
+    resp.set_cookie(
+        AUTH_COOKIE_NAME,
+        sid,
+        max_age=AUTH_SESSION_TTL_SEC,
+        httponly=True,
+        secure=False,
+        samesite='lax',
+        path='/',
+    )
+    return resp
+
+
+@app.post('/auth/logout')
+def auth_logout(request: Request):
+    sid = request.cookies.get(AUTH_COOKIE_NAME, '')
+    if sid:
+        AUTH_SESSIONS.pop(sid, None)
+    resp = JSONResponse({'ok': True})
+    resp.delete_cookie(AUTH_COOKIE_NAME, path='/')
+    return resp
+
+
+@app.post('/api/security/password')
+def set_web_password(payload: dict):
+    raw = load_config()
+    enabled = bool(payload.get('enabled', False))
+    new_password = str(payload.get('password') or '').strip()
+
+    if enabled:
+        if new_password:
+            if len(new_password) < 6:
+                return JSONResponse({'ok': False, 'error': '密码至少6位'}, status_code=400)
+            raw['web_password_hash'] = _hash_password(new_password)
+        elif not raw.get('web_password_hash'):
+            return JSONResponse({'ok': False, 'error': '首次启用必须设置密码'}, status_code=400)
+
+    raw['web_auth_enabled'] = enabled
+    save_json(CONFIG_PATH, raw)
+    log('访问密码配置已更新')
+    return {'ok': True, 'enabled': enabled}
+
+
+@app.get('/_legacy_hidden', response_class=HTMLResponse)
+def legacy_index():
     return """
 <!doctype html>
 <html>
@@ -687,13 +1512,14 @@ def index():
 </head>
 <body>
   <div class='wrap'>
-    <div class='title'><h2>Catch Magic Web <span style='font-size:13px;color:var(--sub);font-weight:500'>v__APP_VERSION__</span></h2><div class='actions'><button class='ghost' type='button' onclick='openMainConfigModal()'>基础配置</button><button class='ghost' type='button' onclick='openTGModal()'>TG配置</button><button class='ghost compact' type='button' onclick='openMagicCfgModal()'>魔法配置</button><button class='ghost compact' type='button' onclick='runSelfMagicOnce()'>手动魔法</button><button class='ghost compact' type='button' onclick='retryFailedPushes()'>失败重推</button><button class='ghost' type='button' onclick='toggleTheme()'>🌗 主题切换</button><div class='badge' id='runBadge'>状态读取中...</div></div></div>
+    <div class='title'><h2>Catch Magic Web <span style='font-size:13px;color:var(--sub);font-weight:500'>v__APP_VERSION__</span></h2><div class='actions'><button class='ghost' type='button' onclick='openMainConfigModal()'>基础配置</button><button class='ghost' type='button' onclick='openTGModal()'>TG配置</button><button class='ghost compact' type='button' onclick='openMagicCfgModal();return false;'>魔法配置</button><button class='ghost compact' type='button' onclick='runSelfMagicOnce()'>手动魔法</button><button class='ghost compact' type='button' onclick='retryFailedPushes()'>失败重推</button><button class='ghost' type='button' onclick='toggleTheme()'>🌗 主题切换</button><div class='badge' id='runBadge'>状态读取中...</div></div></div>
     <div id='app' class='grid'>loading...</div>
   </div>
 <script>
 let qbClients=[];
 let qbStatsTimer=null;
 let editingQbIndex=null;
+let logCursor=0;
 
 async function j(u,o){const r=await fetch(u,o);return await r.json()}
 function esc(t){return (t??'').toString().replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
@@ -710,8 +1536,10 @@ function toggleTheme(){ localStorage.setItem('cm_theme', getTheme()==='light'?'d
 function openMagicCfgModal(){
   ['qbModal','mainCfgModal','tgModal'].forEach(id=>{const x=document.getElementById(id); if(x) x.style.display='none';});
   const m=document.getElementById('magicCfgModal');
-  if(m) m.style.display='flex';
-  else alert('魔法配置弹窗加载失败，请刷新页面后重试');
+  if(!m){ alert('魔法配置弹窗加载失败，请刷新页面后重试'); return; }
+  m.style.display='flex';
+  m.style.zIndex='1200';
+  m.style.pointerEvents='auto';
 }
 function closeMagicCfgModal(){
   const m=document.getElementById('magicCfgModal');
@@ -723,6 +1551,7 @@ async function saveMagicConfigOnly(){
     auto_self_magic_enabled:document.getElementById('auto_self_magic_enabled')?.checked||false,
     auto_self_magic_min_upload_kib:parseInt(document.getElementById('auto_self_magic_min_upload_kib')?.value||'1024'),
     auto_self_magic_min_size_gb:parseInt(document.getElementById('auto_self_magic_min_size_gb')?.value||'5'),
+    auto_self_magic_max_size_gb:parseInt(document.getElementById('auto_self_magic_max_size_gb')?.value||'0'),
     auto_self_magic_hours:parseInt(document.getElementById('auto_self_magic_hours')?.value||'24'),
     auto_self_magic_interval:parseInt(document.getElementById('auto_self_magic_interval')?.value||'60'),
     auto_self_magic_magic_downloading:document.getElementById('auto_self_magic_magic_downloading')?.checked!==false,
@@ -873,7 +1702,8 @@ async function refreshQbStats(){
 
 async function load(){
  applyTheme();
- const c=await j('/api/config'); const s=await j('/api/status'); qbClients = JSON.parse(JSON.stringify(c.qb_clients || []));
+ const [c, s] = await Promise.all([j('/api/config'), j('/api/status')]);
+ qbClients = JSON.parse(JSON.stringify(c.qb_clients || []));
  document.getElementById('runBadge').innerHTML=statusBadge(s, c.enabled);
  document.getElementById('app').innerHTML=`
  <div class='card'><div class='status'>
@@ -910,7 +1740,7 @@ async function load(){
    <div><label>单种上传限速(MB/s)</label><input id='qb_up_limit_mb' type='number' min='0' value='${c.qb_up_limit_mb??50}'></div>
    <div class='switch'><input id='require_2x_free' type='checkbox' ${c.require_2x_free!==false?'checked':''}><label for='require_2x_free' style='margin:0;color:var(--text)'>仅抓取 2XFree</label></div>
  </div>
- <div class='actions' style='margin-top:12px'><button onclick='save()'>保存配置</button><button onclick='runNow()'>立即执行一次</button><button class='ghost' onclick='refreshLogs()'>刷新日志</button></div>
+ <div class='actions' style='margin-top:12px'><button onclick='save()'>保存配置</button><button onclick='runNow()'>立即执行一次</button><button class='ghost' onclick='refreshLogs(true)'>刷新日志</button></div>
  <div class='tip' style='margin-top:10px'>点击模块上的“配置”按钮才会弹出配置窗口。</div>
  </div>
 
@@ -958,7 +1788,7 @@ async function load(){
        <button onclick='testTG()'>测试通知</button>
      </div>
    </div>
- 
+ </div>
 
  <div id='magicCfgModal' style='display:none;position:fixed;inset:0;background:#0008;z-index:1000;align-items:center;justify-content:center;padding:14px'>
    <div style='width:min(700px,100%);max-height:90vh;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px'>
@@ -972,6 +1802,7 @@ async function load(){
        <div class='switch'><input id='auto_self_magic_magic_downloading' type='checkbox' ${c.auto_self_magic_magic_downloading!==false?'checked':''}><label for='auto_self_magic_magic_downloading' style='margin:0;color:var(--text)'>包含下载中的种子</label></div>
        <div><label>最小上传速度(KiB/s)</label><input id='auto_self_magic_min_upload_kib' type='number' min='1' value='${c.auto_self_magic_min_upload_kib??1024}'></div>
        <div><label>最小体积(GB)</label><input id='auto_self_magic_min_size_gb' type='number' min='1' value='${c.auto_self_magic_min_size_gb??5}'></div>
+       <div><label>最大体积(GB，0=不限制)</label><input id='auto_self_magic_max_size_gb' type='number' min='0' value='${c.auto_self_magic_max_size_gb??0}'></div>
        <div><label>种子最小生存天数</label><input id='auto_self_magic_min_d' type='number' min='0' value='${c.auto_self_magic_min_d??180}'></div>
        <div><label>魔法时长(小时)</label><input id='auto_self_magic_hours' type='number' min='1' max='360' value='${c.auto_self_magic_hours??24}'></div>
        <div><label>U2 UID</label><input id='u2_uid' type='number' min='0' value='${c.u2_uid??0}'></div>
@@ -988,8 +1819,9 @@ async function load(){
  setTGForm(c);
  await refreshQbStats();
  if(qbStatsTimer) clearInterval(qbStatsTimer);
- qbStatsTimer = setInterval(refreshQbStats, 5000);
- await refreshLogs();
+ qbStatsTimer = setInterval(refreshQbStats, 8000);
+ logCursor = 0;
+ setTimeout(()=>refreshLogs(true), 0);
 }
 async function save(){
  const body={
@@ -1016,7 +1848,27 @@ async function testTG(){ const r=await fetch('/api/tg/test',{method:'POST'}); co
 async function runNow(){ await fetch('/api/run',{method:'POST'}); setTimeout(load, 900); }
 async function retryFailedPushes(){ const r=await fetch('/api/retry_failed',{method:'POST'}); const d=await r.json(); if(!d.ok){ alert('重推失败：'+(d.error||'未知错误')); return;} alert(`重推完成：共${d.retried||0}条，成功${d.success||0}条，剩余${d.remain||0}条`); setTimeout(load,500); }
 async function runSelfMagicOnce(){ const r=await fetch('/api/self_magic/once',{method:'POST'}); const d=await r.json(); if(!d.ok){ alert('手动自放失败：'+(d.error||'未知错误')); return;} alert(`手动自放完成：${d.msg||('成功'+(d.done||0)+'条')}`); setTimeout(load,500); }
-async function refreshLogs(){ const t=await fetch('/api/logs').then(r=>r.text()); const node=document.getElementById('logs'); if(node) node.textContent=t||'(暂无日志)'; }
+async function refreshLogs(force=false){
+  try{
+    const node=document.getElementById('logs');
+    const ctl=new AbortController();
+    const tm=setTimeout(()=>ctl.abort(), 6000);
+    const cursor = force ? 0 : logCursor;
+    const d=await fetch(`/api/logs?cursor=${cursor}&limit=200`,{signal:ctl.signal}).then(r=>r.json());
+    clearTimeout(tm);
+    if(!node) return;
+    if(force || d.reset){
+      node.textContent=(d.text||'(暂无日志)');
+    }else if(d.text){
+      node.textContent=d.text + (node.textContent?('\n'+node.textContent):'');
+    }
+    logCursor = Number(d.cursor||logCursor||0);
+    if(!node.textContent) node.textContent='(暂无日志)';
+  }catch(e){
+    const node=document.getElementById('logs');
+    if(node) node.textContent='日志加载超时，请稍后点“刷新日志”重试';
+  }
+}
 load();
 </script>
 </body></html>
@@ -1030,16 +1882,27 @@ def get_version():
 
 @app.get('/api/config')
 def get_config():
-    return load_config()
+    c = load_config()
+    raw_hash = str(c.get('web_password_hash') or '')
+    c['web_password_hash'] = ''
+    c['web_auth_ready'] = bool(raw_hash.strip())
+    return c
 
 
 @app.put('/api/config')
 def put_config(cfg: ConfigIn):
+    old = load_config()
     data = cfg.dict()
     data['interval'] = max(10, int(data['interval']))
     data['qb_up_limit_mb'] = max(0, int(data.get('qb_up_limit_mb', 50)))
+    data['auto_self_magic_max_size_gb'] = max(0, int(data.get('auto_self_magic_max_size_gb', 0)))
     if not data.get('qb_clients'):
         data['qb_clients'] = []
+
+    # 保留安全配置，避免被普通配置覆盖丢失
+    data['web_auth_enabled'] = bool(old.get('web_auth_enabled', False))
+    data['web_password_hash'] = str(old.get('web_password_hash') or '')
+
     save_json(CONFIG_PATH, data)
     log('配置已更新')
     return {'ok': True}
@@ -1064,10 +1927,52 @@ def run_now():
 def qb_stats():
     cfg = load_config()
     clients = cfg.get('qb_clients') or []
-    stats = [qb_fetch_stats(c) for c in clients]
+    if not clients:
+        return {'items': [], 'mode': cfg.get('qb_mode', 'round_robin')}
+
+    stats = [None] * len(clients)
+    max_workers = min(8, len(clients))
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        future_map = {ex.submit(qb_fetch_stats, c, 8): i for i, c in enumerate(clients)}
+        for fut in as_completed(future_map):
+            i = future_map[fut]
+            try:
+                stats[i] = fut.result()
+            except Exception as e:
+                name = clients[i].get('name') or clients[i].get('qb_url') or 'unknown'
+                stats[i] = {'name': name, 'ok': False, 'error': str(e)}
+
     return {'items': stats, 'mode': cfg.get('qb_mode', 'round_robin')}
 
 
+@app.post('/api/qb/test')
+def qb_test(payload: dict):
+    try:
+        client = payload.get('client') or {}
+    except Exception:
+        client = {}
+    st = qb_fetch_stats(client, 6)
+    if st.get('ok'):
+        return {'ok': True, 'message': '连接成功', 'stats': st}
+    return {'ok': False, 'error': st.get('error') or '连接失败'}
+
+
+@app.post('/api/qb/jump')
+def qb_jump(payload: dict):
+    client = (payload or {}).get('client') or {}
+    qb_url = str(client.get('qb_url') or '').strip().rstrip('/')
+    if not qb_url:
+        return {'ok': False, 'error': '缺少 qb_url'}
+    p = urlparse(qb_url)
+    if p.scheme not in ('http', 'https'):
+        return {'ok': False, 'error': 'qb_url 必须是 http/https'}
+    try:
+        _, _, err = qb_login(client)
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    if err:
+        return {'ok': False, 'error': err}
+    return {'ok': True, 'url': qb_url + '/'}
 
 
 @app.post('/api/tg/test')
@@ -1086,48 +1991,212 @@ def tg_test():
 def retry_failed():
     cfg = load_config()
     state = load_json(STATE_PATH, {'last_seen': [], 'last_run': None, 'last_error': None, 'qb_rr_index': 0, 'failed_pushes': []})
-    failed = list(state.get('failed_pushes') or [])
-    if not failed:
-        return {'ok': True, 'retried': 0, 'success': 0}
-
-    # 按当前启用且在线的 qB 重推
-    enabled = [c for c in (cfg.get('qb_clients') or []) if c.get('enabled', True)]
-    healthy, _ = healthy_qb_clients(enabled)
-    if not healthy:
-        return {'ok': False, 'error': '没有可用的 qB 客户端'}
-
-    remain = []
-    success = 0
-    for it in failed:
-        turl = it.get('torrent_url')
-        upl = int(it.get('up_limit_bytes') or 0)
-        ok_one = False
-        for cli in healthy:
-            ok, _ = qb_add_torrent(cli, turl, upl)
-            if ok:
-                ok_one = True
-                success += 1
-                break
-        if not ok_one:
-            remain.append(it)
-
-    state['failed_pushes'] = remain[-200:]
+    res = retry_failed_pushes_once(cfg, state)
     save_json(STATE_PATH, state)
-    return {'ok': True, 'retried': len(failed), 'success': success, 'remain': len(remain)}
+    return res
 
 @app.post('/api/self_magic/once')
 def self_magic_once():
-    cfg = load_config()
-    st = load_json(STATE_PATH, {'last_seen': [], 'last_run': None, 'last_error': None, 'qb_rr_index': 0, 'failed_pushes': []})
-    res = auto_self_magic_once(cfg, st, force=True)
-    save_json(STATE_PATH, st)
-    return res
+    if not SELF_MAGIC_LOCK.acquire(blocking=False):
+        return {'ok': False, 'error': '自放魔法任务正在执行中，请稍后再试'}
+    try:
+        cfg = load_config()
+        st = load_json(STATE_PATH, {'last_seen': [], 'last_run': None, 'last_error': None, 'qb_rr_index': 0, 'failed_pushes': []})
+        res = auto_self_magic_once(cfg, st, force=True)
+        save_json(STATE_PATH, st)
+        return res
+    finally:
+        SELF_MAGIC_LOCK.release()
 
-@app.get('/api/logs', response_class=PlainTextResponse)
-def logs():
-    if not APP_LOG.exists():
-        return ''
-    txt = APP_LOG.read_text(encoding='utf-8', errors='ignore')
-    lines = txt.splitlines()[-200:]
+
+def tail_lines(path: Path, max_lines: int = 200, block_size: int = 8192):
+    if not path.exists():
+        return []
+    with path.open('rb') as f:
+        f.seek(0, 2)
+        file_size = f.tell()
+        data = b''
+        pos = file_size
+        while pos > 0 and data.count(b'\n') <= max_lines:
+            read_size = min(block_size, pos)
+            pos -= read_size
+            f.seek(pos)
+            data = f.read(read_size) + data
+    text = data.decode('utf-8', errors='ignore')
+    lines = text.splitlines()[-max_lines:]
     lines.reverse()
-    return '\n'.join(lines)
+    return lines
+
+
+@app.get('/api/logs')
+def logs(cursor: int = Query(0, ge=0), limit: int = Query(200, ge=50, le=500)):
+    if not APP_LOG.exists():
+        return {'cursor': 0, 'text': '', 'reset': False}
+
+    size = APP_LOG.stat().st_size
+    # 首次加载：直接返回尾部，避免读全量日志
+    if cursor == 0:
+        return {'cursor': size, 'text': '\n'.join(tail_lines(APP_LOG, limit)), 'reset': True}
+
+    # 日志被截断或轮转
+    if cursor > size:
+        return {'cursor': size, 'text': '\n'.join(tail_lines(APP_LOG, limit)), 'reset': True}
+
+    with APP_LOG.open('rb') as f:
+        f.seek(cursor)
+        chunk = f.read(max(0, size - cursor))
+
+    text = chunk.decode('utf-8', errors='ignore').strip()
+    if text:
+        lines = text.splitlines()[-limit:]
+        text = '\n'.join(reversed(lines))
+    return {'cursor': size, 'text': text, 'reset': False}
+
+
+@app.get('/api/self_magic/history')
+def self_magic_history(limit: int = Query(0, ge=0, le=5000)):
+    # 读取完整日志做全量统计（日志量通常可控；若后续变大可改为按日落盘）
+    if APP_LOG.exists():
+        text = APP_LOG.read_text(encoding='utf-8', errors='ignore')
+        lines = text.splitlines()
+    else:
+        lines = []
+
+    succ = []
+
+    re_succ = re.compile(r'^\[(.*?)\]\s+自放魔法成功：tid=(\d+)，hash=([0-9a-fA-F]+)(?:，UC=([0-9]+(?:\.[0-9]+)?))?(?:（(?:([0-9]+)钻)?([0-9]+)金([0-9]+)银([0-9]{1,2})铜）)?')
+
+    log_uc_total = 0.0
+    log_uc_today = 0.0
+    day = _magic_day_key()
+    daily_spent = {}
+    daily_count = {}
+
+    for ln in lines:
+        m = re_succ.search(ln)
+        if not m:
+            continue
+        t = m.group(1)
+        tid = int(m.group(2))
+        h = m.group(3)
+
+        uc = 0.0
+        if m.group(6) is not None:
+            # 新版日志优先按钻金银铜还原，避免历史小数显示歧义
+            gem = int(m.group(5) or 0)
+            gold = int(m.group(6) or 0)
+            silver = int(m.group(7) or 0)
+            copper = int(m.group(8) or 0)
+            uc = float(f'{gem * 10000 + gold * 100 + silver + copper / 100.0:.2f}')
+        elif m.group(4):
+            uc = float(m.group(4))
+
+        succ.append({'time': t, 'tid': tid, 'hash': h, 'uc': uc})
+
+    # 二阶段修正：用论坛 UCoin 变动日志回填历史成本（按 tid + 时间邻近匹配）
+    forum_entries, forum_err = _fetch_ucoin_magic_entries(load_config(), max_pages=3)
+    matched_forum = 0
+    forum_only_added = 0
+    if forum_entries:
+        used = set()
+        for it in succ:
+            dt = _parse_cst_time(str(it.get('time') or ''))
+            tid = int(it.get('tid') or 0)
+            if not dt or not tid:
+                continue
+            best_idx = -1
+            best_gap = 10**9
+            for idx, fe in enumerate(forum_entries):
+                if idx in used:
+                    continue
+                if int(fe.get('tid') or 0) != tid:
+                    continue
+                gap = abs(int((fe.get('dt') - dt).total_seconds()))
+                if gap < best_gap:
+                    best_gap = gap
+                    best_idx = idx
+            if best_idx >= 0 and best_gap <= 8 * 3600:
+                fe = forum_entries[best_idx]
+                used.add(best_idx)
+                it['uc'] = float(fe.get('uc') or 0.0)
+                it['ucParts'] = dict(fe.get('ucParts') or _uc_parts(it['uc']))
+                it['ucFrom'] = 'forum'
+                matched_forum += 1
+
+        # 论坛有但本地日志没有的魔法消费，也纳入统计（避免“今日消耗为0”）
+        for idx, fe in enumerate(forum_entries):
+            if idx in used:
+                continue
+            succ.append({
+                'time': fe.get('time'),
+                'tid': int(fe.get('tid') or 0),
+                'hash': '-',
+                'uc': float(fe.get('uc') or 0.0),
+                'ucParts': dict(fe.get('ucParts') or _uc_parts(float(fe.get('uc') or 0.0))),
+                'ucFrom': 'forum_only',
+            })
+            forum_only_added += 1
+
+    # 统一补齐展示字段并统计
+    for it in succ:
+        p = dict(it.get('ucParts') or _uc_parts(float(it.get('uc') or 0.0)))
+        it['ucParts'] = p
+        it['ucText'] = _format_uc_cn(float(it.get('uc') or 0.0))
+        it['ucCopper'] = _uc_to_copper_value(float(it.get('uc') or 0.0))
+        uc = float(it.get('uc') or 0.0)
+        log_uc_total += uc
+
+        dkey = str(it.get('time') or '').split(' ', 1)[0]
+        daily_spent[dkey] = float(daily_spent.get(dkey) or 0.0) + uc
+        daily_count[dkey] = int(daily_count.get(dkey) or 0) + 1
+        if str(it.get('time') or '').startswith(day):
+            log_uc_today += uc
+
+    st = load_json(STATE_PATH, {'last_seen': [], 'last_run': None, 'last_error': None, 'qb_rr_index': 0, 'failed_pushes': []})
+    uc_total_state = float(st.get('self_magic_uc_total') or 0.0)
+    uc_today_state = float((st.get('self_magic_uc_by_day') or {}).get(day) or 0.0)
+    # 兼容历史版本未累计UC：使用 state 与日志统计的较大值，避免显示为0
+    uc_total = max(uc_total_state, log_uc_total)
+    uc_today = max(uc_today_state, log_uc_today)
+
+    fail_total = int(st.get('self_magic_fail_total') or 0)
+    fail_today = int((st.get('self_magic_fail_by_day') or {}).get(day) or 0)
+    daily_limit_total = int(st.get('self_magic_daily_limit_total') or 0)
+    daily_limit_today = int((st.get('self_magic_daily_limit_by_day') or {}).get(day) or 0)
+
+    succ.sort(key=lambda x: str(x.get('time') or ''), reverse=True)
+    items = succ if limit == 0 else succ[:limit]
+    daily_items = []
+    for d in sorted(daily_spent.keys(), reverse=True):
+        u = float(daily_spent.get(d) or 0.0)
+        daily_items.append({'day': d, 'count': int(daily_count.get(d) or 0), 'uc': u, 'ucText': _format_uc_cn(u), 'ucParts': _uc_parts(u), 'ucCopper': _uc_to_copper_value(u)})
+
+    note = '历史记录按日志全量重算。'
+    if forum_entries:
+        note += f' 已用论坛UCoin日志修正 {matched_forum} 条，补入仅论坛记录 {forum_only_added} 条。'
+    elif forum_err:
+        note += f' 论坛UCoin日志获取失败：{forum_err}'
+    else:
+        note += ' 未获取到论坛UCoin日志。'
+
+    return {
+        'ok': True,
+        'count': len(succ),
+        'items': items,
+        'dailyItems': daily_items,
+        'ucSpentTotal': uc_total,
+        'ucSpentToday': uc_today,
+        'ucSpentTotalText': _format_uc_cn(uc_total),
+        'ucSpentTodayText': _format_uc_cn(uc_today),
+        'ucSpentTotalParts': _uc_parts(uc_total),
+        'ucSpentTodayParts': _uc_parts(uc_today),
+        'ucSpentTotalCopper': _uc_to_copper_value(uc_total),
+        'ucSpentTodayCopper': _uc_to_copper_value(uc_today),
+        'failTotal': fail_total,
+        'failToday': fail_today,
+        'dailyLimitTotal': daily_limit_total,
+        'dailyLimitToday': daily_limit_today,
+        'forumMatched': matched_forum,
+        'forumOnlyAdded': forum_only_added,
+        'note': note,
+    }
