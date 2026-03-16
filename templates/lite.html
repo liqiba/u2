@@ -177,12 +177,13 @@ async function renderAuth(){
   el('cfg-auth').innerHTML = `
   <h3>访问密码保护</h3>
   <div class='grid grid-2'>
-    <div><div class='k'>启用访问密码</div><input id='a_enabled' type='checkbox' ${c.web_auth_enabled?'checked':''}></div>
-    <div><div class='k'>当前状态</div><div class='v'>${c.web_auth_enabled?'已启用':'未启用'} ${c.web_auth_ready?'（已设置密码）':'（未设置密码）'}</div></div>
-    <div class='full'><div class='k'>新密码（留空=不修改）</div><input id='a_password' type='password' placeholder='至少6位'></div>
+    <div><div class='k'>当前状态</div><div class='v'>${c.web_auth_enabled?'已启用（需登录）':'未启用（可直接访问）'}</div></div>
+    <div><div class='k'>说明</div><div class='v'>设置密码后将强制登录；删除密码后恢复免密访问</div></div>
+    <div class='full'><div class='k'>新密码</div><input id='a_password' type='password' placeholder='至少6位'></div>
   </div>
   <div class='row' style='margin-top:10px'>
-    <button class='btn' onclick='saveAuth(event)'>保存访问密码设置</button>
+    <button class='btn' onclick='saveAuth(event)'>设置/更新密码</button>
+    <button class='btn' onclick='deleteAuthPassword(event)'>删除密码（恢复免密）</button>
     <button class='btn' onclick='logoutNow(event)'>退出登录</button>
     <button class='btn' onclick='closeCfg()'>关闭</button>
   </div>
@@ -190,20 +191,28 @@ async function renderAuth(){
 }
 
 async function saveAuth(ev){
-  const enabled = el('a_enabled').checked;
   const password = (el('a_password').value||'').trim();
-  if(enabled && !password){
-    const c = await getCfg();
-    if(!c.web_auth_ready){ toast('首次启用必须设置密码', false); return; }
-  }
+  if(!password){ toast('请输入新密码', false); return; }
   setLoading(ev?.target, true);
   let d={ok:false,error:'请求失败'};
   try{
-    d = await fetch('/api/security/password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled, password})}).then(r=>r.json());
+    d = await fetch('/api/security/password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password})}).then(r=>r.json());
   }catch(e){ d={ok:false,error:'请求失败'}; }
   setLoading(ev?.target, false);
-  if(d.ok){ cfg=null; toast('访问密码设置已保存', true); renderAuth(); }
+  if(d.ok){ cfg=null; toast('访问密码设置成功', true); renderAuth(); }
   else toast(`保存失败：${d.error||'unknown'}`, false);
+}
+
+async function deleteAuthPassword(ev){
+  if(!confirm('确认删除访问密码？删除后将恢复免密访问。')) return;
+  setLoading(ev?.target, true);
+  let d={ok:false,error:'请求失败'};
+  try{
+    d = await fetch('/api/security/password/delete',{method:'POST'}).then(r=>r.json());
+  }catch(e){ d={ok:false,error:'请求失败'}; }
+  setLoading(ev?.target, false);
+  if(d.ok){ cfg=null; toast('访问密码已删除，已恢复免密访问', true); renderAuth(); }
+  else toast(`删除失败：${d.error||'unknown'}`, false);
 }
 
 async function logoutNow(ev){

@@ -189,7 +189,8 @@ def _verify_password(password: str, stored: str):
 
 
 def _auth_enabled(cfg: dict):
-    return bool(cfg.get('web_auth_enabled')) and bool(str(cfg.get('web_password_hash') or '').strip())
+    # 只要已配置密码，就强制要求登录访问
+    return bool(str(cfg.get('web_password_hash') or '').strip())
 
 
 def _guard_info(ip: str):
@@ -1440,21 +1441,28 @@ def auth_logout(request: Request):
 @app.post('/api/security/password')
 def set_web_password(payload: dict):
     raw = load_config()
-    enabled = bool(payload.get('enabled', False))
     new_password = str(payload.get('password') or '').strip()
 
-    if enabled:
-        if new_password:
-            if len(new_password) < 6:
-                return JSONResponse({'ok': False, 'error': '密码至少6位'}, status_code=400)
-            raw['web_password_hash'] = _hash_password(new_password)
-        elif not raw.get('web_password_hash'):
-            return JSONResponse({'ok': False, 'error': '首次启用必须设置密码'}, status_code=400)
+    if not new_password:
+        return JSONResponse({'ok': False, 'error': '请输入新密码'}, status_code=400)
+    if len(new_password) < 6:
+        return JSONResponse({'ok': False, 'error': '密码至少6位'}, status_code=400)
 
-    raw['web_auth_enabled'] = enabled
+    raw['web_password_hash'] = _hash_password(new_password)
+    raw['web_auth_enabled'] = True
     save_json(CONFIG_PATH, raw)
-    log('访问密码配置已更新')
-    return {'ok': True, 'enabled': enabled}
+    log('访问密码已设置/更新')
+    return {'ok': True, 'enabled': True}
+
+
+@app.post('/api/security/password/delete')
+def delete_web_password():
+    raw = load_config()
+    raw['web_password_hash'] = ''
+    raw['web_auth_enabled'] = False
+    save_json(CONFIG_PATH, raw)
+    log('访问密码已删除，恢复免密访问')
+    return {'ok': True}
 
 
 @app.get('/_legacy_hidden', response_class=HTMLResponse)
@@ -1884,8 +1892,10 @@ def get_version():
 def get_config():
     c = load_config()
     raw_hash = str(c.get('web_password_hash') or '')
+    enabled = bool(raw_hash.strip())
     c['web_password_hash'] = ''
-    c['web_auth_ready'] = bool(raw_hash.strip())
+    c['web_auth_ready'] = enabled
+    c['web_auth_enabled'] = enabled
     return c
 
 
