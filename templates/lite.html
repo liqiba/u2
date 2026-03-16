@@ -17,6 +17,8 @@
         <button class="btn" onclick="toggleCfg('magic')">魔法配置</button>
         <button class="btn" onclick="toggleCfg('qb')">qB配置</button>
         <button class="btn" onclick="toggleCfg('auth')">访问密码</button>
+        <button class="btn" onclick="triggerUpgrade(event)">一键升级</button>
+        <span id="upgrade-status" class="k" style="margin-left:6px">升级状态读取中...</span>
         <button class="btn" onclick="toggleTheme()">🌗 主题</button>
       </div>
     </div>
@@ -26,10 +28,6 @@
     <section id="cfg-magic" class="card hide"></section>
     <section id="cfg-qb" class="card hide"></section>
     <section id="cfg-auth" class="card hide"></section>
-    <section id="upgrade-box" class="card">
-      <div class="row-between"><h3>一键升级容器</h3><button class="btn" onclick="triggerUpgrade(event)">立即升级</button></div>
-      <div id="upgrade-status" class="k">状态读取中...</div>
-    </section>
     <textarea id="qb-import" class="hide" placeholder="粘贴 qB JSON 数组"></textarea>
     <div id="toast" class="toast hide"></div>
 
@@ -383,11 +381,10 @@ let upgradeLastState='';
 
 function upgradeStateText(d){
   const st=(d.state||'unknown').toLowerCase();
-  const msg=d.message||'';
-  if(st==='running') return `🟡 升级中 | ${d.updated_at||'-'} | ${msg}`;
-  if(st==='success') return `🟢 升级成功 | ${d.updated_at||'-'} | ${msg}`;
-  if(st==='failed') return `🔴 升级失败 | ${d.updated_at||'-'} | ${msg}`;
-  return `⚪ ${d.state||'unknown'} | ${d.updated_at||'-'} | ${msg}`;
+  if(st==='running') return `🟡 升级中`;
+  if(st==='success') return `🟢 升级成功`;
+  if(st==='failed') return `🔴 升级失败`;
+  return `⚪ 待命`;
 }
 
 async function refreshUpgradeStatus(){
