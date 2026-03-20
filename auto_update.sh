@@ -15,9 +15,13 @@ log(){ echo "[$(date -u +"%Y-%m-%d %H:%M:%S UTC")] $*" >> "$LOG_FILE"; }
 set_status(){
   local state="$1"; shift
   local msg="$*"
-  cat > "$STATUS_FILE" <<EOF
-{"state":"${state}","updated_at":"$(date +"%Y-%m-%d %H:%M:%S CST")","message":"${msg//"/\"}"}
-EOF
+  python3 - <<'PY2' "$STATUS_FILE" "$state" "$msg"
+import json,sys,datetime
+path,state,msg=sys.argv[1],sys.argv[2],sys.argv[3]
+now=datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S CST')
+with open(path,'w',encoding='utf-8') as f:
+    json.dump({'state':state,'updated_at':now,'message':msg}, f, ensure_ascii=False)
+PY2
 }
 
 tg_send(){
