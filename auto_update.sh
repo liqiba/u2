@@ -78,6 +78,41 @@ PY
   REMOTE_SHA="$(git rev-parse origin/main 2>/dev/null || true)"
 
   if [[ -n "$REMOTE_SHA" && "$LOCAL_SHA" == "$REMOTE_SHA" ]]; then
+    # 代码仓库已最新，但容器可能仍在旧镜像（例如此前仅 git 更新、未重建）
+    REPO_VER="$(python3 - <<'PYV'
+import re
+s=open('/opt/catch_magic_web/main.py','r',encoding='utf-8').read()
+m=re.search(r"APP_VERSION\s*=\s*'([^']+)'", s)
+print(m.group(1) if m else '')
+PYV
+)"
+    RUN_VER="$(docker exec "$SERVICE_NAME" python -c "import main; print(main.APP_VERSION)" 2>/dev/null || true)"
+
+    if [[ -n "$REPO_VER" && -n "$RUN_VER" && "$REPO_VER" != "$RUN_VER" ]]; then
+      set_status running "检测到运行版本落后(${RUN_VER} -> ${REPO_VER})，开始重建容器"
+      if ! docker-compose up -d --build >/dev/null 2>&1; then
+        set_status failed "运行版本落后但重建失败"
+        tg_send "❌ U2 升级失败：运行版本落后且重建失败"
+        rm -f "$REQUEST_FILE"
+        exit 1
+      fi
+      sleep 4
+      if curl -fsS "$HEALTH_URL" >/dev/null 2>&1; then
+        set_status success "已同步运行版本：${RUN_VER} -> ${REPO_VER}"
+        log "sync runtime version success: $RUN_VER -> $REPO_VER"
+        tg_send "✅ U2 已同步运行版本
+${RUN_VER} -> ${REPO_VER}"
+      else
+        set_status failed "运行版本同步后健康检查失败"
+        log "sync runtime version failed: health check failed"
+        tg_send "❌ U2 版本同步后健康检查失败"
+        rm -f "$REQUEST_FILE"
+        exit 1
+      fi
+      rm -f "$REQUEST_FILE"
+      exit 0
+    fi
+
     set_status latest "已经是最新版本，无需升级"
     log "already latest: $LOCAL_SHA"
     tg_send "✅ U2 已是最新版本，无需升级"
