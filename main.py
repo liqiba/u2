@@ -31,7 +31,7 @@ STATE_PATH = DATA_DIR / 'state.json'
 UPGRADE_REQUEST_PATH = DATA_DIR / 'upgrade.request.json'
 UPGRADE_STATUS_PATH = DATA_DIR / 'upgrade.status.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.95'
+APP_VERSION = '2026.3.97'
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / 'templates'
 STATIC_DIR = BASE_DIR / 'static'
@@ -67,6 +67,9 @@ DEFAULT_CONFIG = {
     'tg_chat_id': '',
     'tg_notify_new': True,
     'tg_notify_error': True,
+    'failed_retry_interval_seconds': 300,
+    'failed_retry_batch': 20,
+    'failed_push_ttl_seconds': 1800,
     'web_auth_enabled': False,
     'web_password_hash': '',
     'qb_clients': [
@@ -430,14 +433,30 @@ def healthy_qb_clients(clients: list):
 
 def add_failed_push(state: dict, item: dict):
     arr = list(state.get('failed_pushes') or [])
+    if not item.get('fail_ts'):
+        item['fail_ts'] = int(time.time())
     arr.append(item)
     state['failed_pushes'] = arr[-200:]
+
+
+def _failed_item_ts(item: dict):
+    ts = item.get('fail_ts')
+    if isinstance(ts, (int, float)) and ts > 0:
+        return int(ts)
+    t = str(item.get('time') or '').strip()
+    if t:
+        try:
+            dt = datetime.strptime(t, '%Y-%m-%d %H:%M:%S CST').replace(tzinfo=LOCAL_TZ)
+            return int(dt.timestamp())
+        except Exception:
+            return 0
+    return 0
 
 
 def retry_failed_pushes_once(cfg: dict, state: dict):
     failed = list(state.get('failed_pushes') or [])
     if not failed:
-        return {'ok': True, 'retried': 0, 'success': 0, 'remain': 0}
+        return {'ok': True, 'retried': 0, 'success': 0, 'remain': 0, 'expired': 0}
 
     enabled = [c for c in (cfg.get('qb_clients') or []) if c.get('enabled', True)]
     healthy, _ = healthy_qb_clients(enabled)
@@ -445,9 +464,27 @@ def retry_failed_pushes_once(cfg: dict, state: dict):
     if not targets:
         return {'ok': False, 'error': '没有启用的 qB 客户端'}
 
-    remain = []
-    success = 0
+    # 失败项最多保留30分钟；超时直接丢弃，避免旧种子集中补推。
+    ttl_seconds = max(60, int(cfg.get('failed_push_ttl_seconds', 1800) or 1800))
+    # 每轮重推限流，避免一次性爆量。
+    batch = max(1, int(cfg.get('failed_retry_batch', 20) or 20))
+
+    now_ts = int(time.time())
+    valid = []
+    expired = 0
     for it in failed:
+        its = _failed_item_ts(it)
+        if its > 0 and (now_ts - its) > ttl_seconds:
+            expired += 1
+            continue
+        valid.append(it)
+
+    to_retry = valid[:batch]
+    pending = valid[batch:]
+
+    success = 0
+    remain_retry = []
+    for it in to_retry:
         turl = it.get('torrent_url')
         upl = int(it.get('up_limit_bytes') or 0)
         ok_one = False
@@ -462,10 +499,18 @@ def retry_failed_pushes_once(cfg: dict, state: dict):
             if ok_one:
                 break
         if not ok_one:
-            remain.append(it)
+            remain_retry.append(it)
 
+    remain = remain_retry + pending
     state['failed_pushes'] = remain[-200:]
-    return {'ok': True, 'retried': len(failed), 'success': success, 'remain': len(remain)}
+    return {
+        'ok': True,
+        'retried': len(to_retry),
+        'success': success,
+        'remain': len(remain),
+        'expired': expired,
+        'batch': batch,
+    }
 
 
 def summarize_error_cn(err: str):
@@ -1250,16 +1295,21 @@ class Runner:
             else:
                 log('自放魔法：已有任务执行中，跳过本轮')
 
-            # 失败推送自动重试：每10分钟触发一次
+            # 失败推送自动重试：每5分钟触发一次
             now_ts2 = int(time.time())
             last_retry_ts = int(state.get('failed_retry_last_ts') or 0)
-            if now_ts2 - last_retry_ts >= 600:
+            retry_interval = max(60, int(cfg.get('failed_retry_interval_seconds', 300) or 300))
+            if now_ts2 - last_retry_ts >= retry_interval:
                 rr = retry_failed_pushes_once(cfg, state)
                 state['failed_retry_last_ts'] = now_ts2
-                if rr.get('ok') and int(rr.get('retried') or 0) > 0:
-                    log(f"失败重推(自动10分钟)：重试={rr.get('retried', 0)}，成功={rr.get('success', 0)}，剩余={rr.get('remain', 0)}")
+                if rr.get('ok') and (int(rr.get('retried') or 0) > 0 or int(rr.get('expired') or 0) > 0):
+                    log(
+                        f"失败重推(自动{retry_interval//60}分钟)："
+                        f"重试={rr.get('retried', 0)}，成功={rr.get('success', 0)}，"
+                        f"过期丢弃={rr.get('expired', 0)}，剩余={rr.get('remain', 0)}"
+                    )
                 elif not rr.get('ok'):
-                    log(f"失败重推(自动10分钟)跳过：{rr.get('error')}")
+                    log(f"失败重推(自动{retry_interval//60}分钟)跳过：{rr.get('error')}")
 
             state['last_seen'] = [str((p.get('promotion_id') or p.get('id'))) for p in data if (p.get('promotion_id') or p.get('id'))][:200]
             state['last_run'] = now_iso()

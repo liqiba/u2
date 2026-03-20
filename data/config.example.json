@@ -9,6 +9,9 @@
   "max_seeders": 5,
   "download_non_free": false,
   "qb_mode": "round_robin",
+  "failed_retry_interval_seconds": 300,
+  "failed_retry_batch": 20,
+  "failed_push_ttl_seconds": 1800,
   "qb_clients": [
     {
       "name": "qb-1",
