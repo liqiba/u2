@@ -31,7 +31,7 @@ STATE_PATH = DATA_DIR / 'state.json'
 UPGRADE_REQUEST_PATH = DATA_DIR / 'upgrade.request.json'
 UPGRADE_STATUS_PATH = DATA_DIR / 'upgrade.status.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.112'
+APP_VERSION = '2026.3.113'
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / 'templates'
 STATIC_DIR = BASE_DIR / 'static'
@@ -894,16 +894,24 @@ def auto_self_magic_once(cfg: dict, state: dict, force: bool = False):
             size = int(t.get('size') or 0)
             prog = float(t.get('progress') or 0)
             added_on = int(t.get('added_on') or 0)
+            tname = str(t.get('name') or '')
             if up < min_up:
+                log(f'自放魔法：跳过 {tname[:80]}，上传速度不足 {up/1024:.1f}KiB/s < {min_up/1024:.1f}KiB/s')
                 continue
             if size < min_size:
+                log(f'自放魔法：跳过 {tname[:80]}，体积过小 {size/1024/1024/1024:.2f}GB < {min_size/1024/1024/1024:.2f}GB')
                 continue
             if max_size > 0 and size > max_size:
+                log(f'自放魔法：跳过 {tname[:80]}，体积过大 {size/1024/1024/1024:.2f}GB > {max_size/1024/1024/1024:.2f}GB')
                 continue
             if (not allow_downloading) and prog < 1.0:
+                log(f'自放魔法：跳过 {tname[:80]}，未完成下载 progress={prog:.3f}')
                 continue
             if min_days > 0 and added_on > 0 and (now - added_on) < min_days * 86400:
+                age_days = (now - added_on) / 86400
+                log(f'自放魔法：跳过 {tname[:80]}，存活天数不足 {age_days:.1f}d < {min_days}d')
                 continue
+            log(f'自放魔法：候选 {tname[:80]}，体积={size/1024/1024/1024:.2f}GB，上传={up/1024:.1f}KiB/s，进度={prog:.3f}')
             candidates.append({'hash': (t.get('hash') or '').lower(), 'up': up, 'size': size})
 
     if not candidates:
