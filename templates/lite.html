@@ -12,22 +12,15 @@
     <div class="top">
       <h2><a href="/" class="logo" title="返回首页">🦞 Catch Magic Lite</a> <small>v{{ version }}</small></h2>
       <div class="row">
-        <button class="btn" onclick="toggleCfg('base')">基础配置</button>
-        <button class="btn" onclick="toggleCfg('tg')">TG配置</button>
-        <button class="btn" onclick="toggleCfg('magic')">魔法配置</button>
-        <button class="btn" onclick="toggleCfg('qb')">qB配置</button>
-        <button class="btn" onclick="toggleCfg('auth')">访问密码</button>
-        <!-- 一键升级入口已按需求隐藏（保留后端接口） -->
-        <button class="btn" onclick="toggleTheme()">🌗 主题</button>
+        <button class="btn" onclick="openConfigPage('base')">基础配置</button>
+        <button class="btn" onclick="openConfigPage('tg')">TG配置</button>
+        <button class="btn" onclick="openConfigPage('magic')">魔法配置</button>
+        <button class="btn" onclick="openConfigPage('qb')">qB配置</button>
+        <button class="btn" onclick="openConfigPage('security')">访问密码</button>
+        <button class="btn" onclick="openConfigPage('theme')">🌗 主题</button>
       </div>
     </div>
 
-    <section id="cfg-base" class="card hide"></section>
-    <section id="cfg-tg" class="card hide"></section>
-    <section id="cfg-magic" class="card hide"></section>
-    <section id="cfg-qb" class="card hide"></section>
-    <section id="cfg-auth" class="card hide"></section>
-    <textarea id="qb-import" class="hide" placeholder="粘贴 qB JSON 数组"></textarea>
     <div id="toast" class="toast hide"></div>
 
     <div id="magic-history-modal" class="modal hide" onclick="if(event.target===this) closeMagicHistoryModal()">
@@ -64,182 +57,11 @@ function esc(s){return (s??'').toString().replace(/[&<>"']/g,m=>({'&':'&amp;','<
 function getTheme(){ return localStorage.getItem('cm_theme')||'dark'; }
 function applyTheme(){ document.body.classList.toggle('theme-light', getTheme()==='light'); }
 function toggleTheme(){ localStorage.setItem('cm_theme', getTheme()==='light'?'dark':'light'); applyTheme(); }
+function openConfigPage(kind){ const win=window.open(`/config/${kind}`,'_blank','noopener,noreferrer'); if(!win) toast('新窗口被浏览器拦截，请允许弹窗', false); }
 function toast(msg, ok=true){ const t=el('toast'); t.textContent=msg; t.className='toast '+(ok?'ok':'err'); setTimeout(()=>t.className='toast hide',2200); }
 function setLoading(btn, on){ if(!btn) return; btn.disabled=!!on; btn.dataset.old=btn.dataset.old||btn.textContent; btn.textContent=on?'处理中...':btn.dataset.old; }
 function validUrl(u){ try{ const x=new URL(u); return x.protocol==='http:'||x.protocol==='https:'; }catch(e){ return false; } }
 async function getCfg(){ if(cfg) return cfg; cfg = await fetch('/api/config').then(r=>r.json()); return cfg; }
-function el(id){ return document.getElementById(id); }
-function hideAll(){ ['base','tg','magic','qb','auth'].forEach(k=>el('cfg-'+k).classList.add('hide')); }
-function closeCfg(){ hideAll(); }
-function toggleCfg(which){
-  hideAll();
-  const box=el('cfg-'+which); box.classList.remove('hide');
-  if(which==='base') renderBase();
-  if(which==='tg') renderTG();
-  if(which==='magic') renderMagic();
-  if(which==='qb') renderQB();
-  if(which==='auth') renderAuth();
-}
-
-async function renderBase(){
-  const c=await getCfg();
-  el('cfg-base').innerHTML = `
-  <h3>基础配置</h3>
-  <div class='grid grid-3'>
-    <div><div class='k'>启用任务</div><input id='b_enabled' type='checkbox' ${c.enabled?'checked':''}></div>
-    <div><div class='k'>间隔(秒)</div><input id='b_interval' type='number' min='10' value='${c.interval||120}'></div>
-    <div><div class='k'>抓取条数(limit)</div><input id='b_limit' type='number' min='1' max='60' value='${c.limit||20}'></div>
-    <div><div class='k'>最大做种人数</div><input id='b_max_seeders' type='number' min='0' value='${c.max_seeders??5}'></div>
-    <div><div class='k'>qB分发模式</div><select id='b_qb_mode'><option value='round_robin' ${(c.qb_mode||'round_robin')==='round_robin'?'selected':''}>轮询</option><option value='all' ${(c.qb_mode||'round_robin')==='all'?'selected':''}>全部推送</option></select></div>
-    <div><div class='k'>单种上传限速(MB/s)</div><input id='b_qb_up_limit_mb' type='number' min='0' value='${c.qb_up_limit_mb??50}'></div>
-    <div class='full'><div class='k'>U2 API Base</div><input id='b_u2_api_base' value='${esc(c.u2_api_base||'')}'></div>
-    <div class='full'><div class='k'>U2 API Token</div><input id='b_u2_api_token' type='password' value='${esc(c.u2_api_token||'')}'></div>
-    <div class='full'><div class='k'>U2 Passkey</div><input id='b_u2_passkey' type='password' value='${esc(c.u2_passkey||'')}'></div>
-    <div><div class='k'>魔法范围</div><select id='b_scope'><option value='public' ${(c.scope||'public')==='public'?'selected':''}>public</option><option value='all' ${(c.scope||'public')==='all'?'selected':''}>all</option><option value='private' ${(c.scope||'public')==='private'?'selected':''}>private</option><option value='global' ${(c.scope||'public')==='global'?'selected':''}>global</option></select></div>
-    <div><div class='k'>仅抓 2XFree</div><input id='b_require_2x_free' type='checkbox' ${c.require_2x_free!==false?'checked':''}></div>
-  </div>
-  <div class='row' style='margin-top:10px'><button class='btn' onclick='saveBase(event)'>保存基础配置</button><button class='btn' onclick='closeCfg()'>关闭</button></div>`;
-}
-async function renderTG(){
-  const c=await getCfg();
-  el('cfg-tg').innerHTML = `
-  <h3>TG配置</h3>
-  <div class='grid grid-2'>
-    <div><div class='k'>启用</div><input id='t_enabled' type='checkbox' ${c.tg_enabled?'checked':''}></div>
-    <div><div class='k'>chat id</div><input id='t_chat' value='${esc(c.tg_chat_id||'')}'></div>
-    <div class='full'><div class='k'>bot token</div><input id='t_token' value='${esc(c.tg_bot_token||'')}'></div>
-  </div>
-  <div class='row' style='margin-top:10px'><button class='btn' onclick='saveTG(event)'>保存TG配置</button><button class='btn' onclick='closeCfg()'>关闭</button></div>`;
-}
-async function renderMagic(){
-  const c=await getCfg();
-  el('cfg-magic').innerHTML = `
-  <h3>魔法配置</h3>
-  <div class='grid grid-3'>
-    <div><div class='k'>启用自动魔法</div><input id='m_enabled' type='checkbox' ${c.auto_self_magic_enabled?'checked':''}></div>
-    <div><div class='k'>检查间隔(秒)</div><input id='m_interval' type='number' min='10' value='${c.auto_self_magic_interval||60}'></div>
-    <div><div class='k'>最小上传(KiB/s)</div><input id='m_minup' type='number' min='1' value='${c.auto_self_magic_min_upload_kib||1024}'></div>
-    <div><div class='k'>最小体积(GB)</div><input id='m_minsize' type='number' min='1' value='${c.auto_self_magic_min_size_gb||5}'></div>
-    <div><div class='k'>最大体积(GB,0=不限)</div><input id='m_maxsize' type='number' min='0' value='${c.auto_self_magic_max_size_gb||0}'></div>
-    <div><div class='k'>最小生存天数</div><input id='m_mind' type='number' min='0' value='${c.auto_self_magic_min_d??30}'></div>
-    <div><div class='k'>魔法时长(小时)</div><input id='m_hours' type='number' min='1' max='360' value='${c.auto_self_magic_hours??24}'></div>
-    <div><div class='k'>包含下载中</div><input id='m_allow_down' type='checkbox' ${c.auto_self_magic_magic_downloading!==false?'checked':''}></div>
-    <div><div class='k'>U2 UID</div><input id='m_uid' type='number' min='0' value='${c.u2_uid??0}'></div>
-    <div class='full'><div class='k'>U2 Cookie(nexusphp_u2)</div><input id='m_cookie' type='password' value='${esc(c.u2_cookie||'')}'></div>
-  </div>
-  <div class='row' style='margin-top:10px'><button class='btn' onclick='saveMagic(event)'>保存魔法配置</button><button class='btn' onclick='runMagicOnce(event)'>手动魔法</button><button class='btn' onclick='queryMagicHistory(event)'>查询放魔记录</button><button class='btn' onclick='closeCfg()'>关闭</button></div>`;
-}
-
-async function renderQB(){
-  const c=await getCfg();
-  const arr=(c.qb_clients||[]);
-  el('cfg-qb').innerHTML = `
-    <div class='row-between'>
-      <h3>qB配置</h3>
-      <div class='row'>
-        <button class='btn' onclick='addQB()'>+ 新增</button>
-        <button class='btn' onclick='batchToggleQB(true)'>全部启用</button>
-        <button class='btn' onclick='batchToggleQB(false)'>全部禁用</button>
-        <button class='btn' onclick='exportQB()'>导出JSON</button>
-        <button class='btn' onclick='importQB()'>导入JSON</button>
-      </div>
-    </div>
-    <div id='qb-editor'></div>
-    <div class='row' style='margin-top:10px'><button class='btn' onclick='saveQBAll(event)'>保存qB配置</button><button class='btn' onclick='closeCfg()'>关闭</button></div>`;
-  const box=el('qb-editor');
-  box.innerHTML = arr.map((q,i)=>`
-    <div class='card' style='margin-bottom:8px'>
-      <div class='row-between'><b>${esc(q.name||('qb-'+(i+1)))}</b><div class='row'><button class='btn' onclick='copyQB(${i})'>复制</button><button class='btn' onclick='testQB(${i}, event)'>连通测试</button><button class='btn' onclick='removeQB(${i})'>删除</button></div></div>
-      <div class='grid grid-3'>
-        <div><div class='k'>名称</div><input data-qb='name' data-i='${i}' value='${esc(q.name||'')}'></div>
-        <div><div class='k'>启用</div><input data-qb='enabled' data-i='${i}' type='checkbox' ${q.enabled!==false?'checked':''}></div>
-        <div><div class='k'>URL</div><input data-qb='qb_url' data-i='${i}' value='${esc(q.qb_url||'http://127.0.0.1:8080')}'></div>
-        <div><div class='k'>用户名</div><input data-qb='qb_username' data-i='${i}' value='${esc(q.qb_username||'')}'></div>
-        <div><div class='k'>密码</div><input data-qb='qb_password' data-i='${i}' value='${esc(q.qb_password||'')}'></div>
-        <div><div class='k'>分类</div><input data-qb='qb_category' data-i='${i}' value='${esc(q.qb_category||'')}'></div>
-        <div class='full'><div class='k'>保存路径</div><input data-qb='qb_savepath' data-i='${i}' value='${esc(q.qb_savepath||'')}'></div>
-      </div>
-    </div>`).join('') || '<div class="k">暂无 qB，点击“新增”创建。</div>';
-}
-function addQB(){ cfg.qb_clients = cfg.qb_clients||[]; cfg.qb_clients.push({name:'qb-new',enabled:true,qb_url:'http://127.0.0.1:8080',qb_username:'',qb_password:'',qb_category:'',qb_savepath:'',qb_paused:false}); renderQB(); }
-function copyQB(i){ const src=(cfg.qb_clients||[])[i]; if(!src) return; cfg.qb_clients.push({...src, name:(src.name||'qb')+'-copy'}); renderQB(); toast('已复制节点', true); }
-function removeQB(i){ cfg.qb_clients.splice(i,1); renderQB(); }
-function batchToggleQB(on){ cfg.qb_clients=(cfg.qb_clients||[]).map(x=>({...x, enabled:on})); renderQB(); toast(on?'已全部启用':'已全部禁用', true); }
-function exportQB(){ const arr=collectQB(); navigator.clipboard.writeText(JSON.stringify(arr,null,2)).then(()=>toast('qB配置已复制到剪贴板', true)).catch(()=>toast('复制失败，请手动复制', false)); }
-function importQB(){
-  const raw=prompt('粘贴 qB JSON 数组');
-  if(!raw) return;
-  try{ const arr=JSON.parse(raw); if(!Array.isArray(arr)) throw new Error('格式错误'); cfg.qb_clients=arr; renderQB(); toast('导入成功，请记得点击保存qB配置', true); }
-  catch(e){ toast('导入失败：JSON 格式错误', false); }
-}
-
-async function renderAuth(){
-  const c=await getCfg();
-  el('cfg-auth').innerHTML = `
-  <h3>访问密码保护</h3>
-  <div class='grid grid-2'>
-    <div><div class='k'>当前状态</div><div class='v'>${c.web_auth_enabled?'已启用（需登录）':'未启用（可直接访问）'}</div></div>
-    <div><div class='k'>说明</div><div class='v'>设置密码后将强制登录；删除密码后恢复免密访问</div></div>
-    <div class='full'><div class='k'>新密码</div><input id='a_password' type='password' placeholder='至少6位'></div>
-  </div>
-  <div class='row' style='margin-top:10px'>
-    <button class='btn' onclick='saveAuth(event)'>设置/更新密码</button>
-    <button class='btn' onclick='deleteAuthPassword(event)'>删除密码（恢复免密）</button>
-    <button class='btn' onclick='logoutNow(event)'>退出登录</button>
-    <button class='btn' onclick='closeCfg()'>关闭</button>
-  </div>
-  <div class='k' style='margin-top:8px'>防爆破已启用：连续输错会临时锁定。</div>`;
-}
-
-async function saveAuth(ev){
-  const password = (el('a_password').value||'').trim();
-  if(!password){ toast('请输入新密码', false); return; }
-  setLoading(ev?.target, true);
-  let d={ok:false,error:'请求失败'};
-  try{
-    d = await fetch('/api/security/password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password})}).then(r=>r.json());
-  }catch(e){ d={ok:false,error:'请求失败'}; }
-  setLoading(ev?.target, false);
-  if(d.ok){ cfg=null; toast('访问密码设置成功', true); renderAuth(); }
-  else toast(`保存失败：${d.error||'unknown'}`, false);
-}
-
-async function deleteAuthPassword(ev){
-  if(!confirm('确认删除访问密码？删除后将恢复免密访问。')) return;
-  const currentPassword = prompt('请输入当前密码以确认删除：');
-  if(currentPassword===null) return;
-  if(!currentPassword.trim()){ toast('请输入当前密码', false); return; }
-  setLoading(ev?.target, true);
-  let d={ok:false,error:'请求失败'};
-  try{
-    d = await fetch('/api/security/password/delete',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({current_password: currentPassword.trim()})
-    }).then(r=>r.json());
-  }catch(e){ d={ok:false,error:'请求失败'}; }
-  setLoading(ev?.target, false);
-  if(d.ok){ cfg=null; toast('访问密码已删除，已恢复免密访问', true); renderAuth(); }
-  else toast(`删除失败：${d.error||'unknown'}`, false);
-}
-
-async function logoutNow(ev){
-  setLoading(ev?.target, true);
-  try{ await fetch('/auth/logout',{method:'POST'}); }catch(e){}
-  setLoading(ev?.target, false);
-  location.href='/login';
-}
-
-function collectQB(){
-  const arr=(cfg.qb_clients||[]).map(x=>({...x}));
-  document.querySelectorAll('[data-qb]').forEach(n=>{
-    const i=parseInt(n.getAttribute('data-i')||'0');
-    const k=n.getAttribute('data-qb');
-    if(!arr[i]) return;
-    arr[i][k] = (n.type==='checkbox') ? n.checked : n.value;
-  });
-  return arr;
-}
 
 async function putCfg(patch, btn){
   const c = await getCfg();
