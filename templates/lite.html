@@ -75,6 +75,12 @@ function setLoading(btn, on){ if(!btn) return; btn.disabled=!!on; btn.dataset.ol
 function validUrl(u){ try{ const x=new URL(u); return x.protocol==='http:'||x.protocol==='https:'; }catch(e){ return false; } }
 async function getCfg(){ if(cfg) return cfg; cfg = await fetch('/api/config').then(r=>r.json()); return cfg; }
 function closePopupCfg(){ el('cfg-popup')?.classList.add('hide'); }
+function closeMagicHistoryModal(){ el('magic-history-modal')?.classList.add('hide'); }
+document.addEventListener('keydown', (event)=>{
+  if(event.key !== 'Escape') return;
+  if(!el('magic-history-modal')?.classList.contains('hide')){ closeMagicHistoryModal(); return; }
+  if(!el('cfg-popup')?.classList.contains('hide')){ closePopupCfg(); }
+});
 function collectQB(){
   const arr=(cfg?.qb_clients||[]).map(x=>({...x}));
   document.querySelectorAll('[data-qb]').forEach(n=>{
@@ -110,7 +116,6 @@ async function saveAuth(ev){ const password = (el('a_password').value||'').trim(
 async function deleteAuthPassword(ev){ if(!confirm('确认删除访问密码？删除后将恢复免密访问。')) return; const currentPassword = prompt('请输入当前密码以确认删除：'); if(currentPassword===null) return; if(!currentPassword.trim()){ toast('请输入当前密码', false); return; } setLoading(ev?.target, true); let d={ok:false,error:'请求失败'}; try{ d = await fetch('/api/security/password/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({current_password: currentPassword.trim()})}).then(r=>r.json()); }catch(e){} setLoading(ev?.target, false); if(d.ok){ cfg=null; toast('访问密码已删除，已恢复免密访问', true); } else toast(`删除失败：${d.error||'unknown'}`, false); }
 async function logoutNow(ev){ setLoading(ev?.target, true); try{ await fetch('/auth/logout',{method:'POST'}); }catch(e){} setLoading(ev?.target, false); location.href='/login'; }
 async function runMagicOnce(ev){ const btn=ev?.target; setLoading(btn,true); let d={ok:false,error:'请求失败'}; try{ d=await fetch('/api/self_magic/once',{method:'POST'}).then(r=>r.json()); }catch(e){} setLoading(btn,false); if(d.ok) toast(`手动魔法完成：${d.msg||('成功'+(d.done||0)+'条')}`, true); else toast(`手动魔法失败：${d.error||'未知错误'}`, false); }
-function closeMagicHistoryModal(){ el('magic-history-modal')?.classList.add('hide'); }
 function openMagicHistoryModal(html){ el('magic-history-content').innerHTML = html; el('magic-history-modal')?.classList.remove('hide'); }
 function forumCoin(parts){ const p=parts||{}; const d=Number(p.gem||0), g=Number(p.gold||0), s=Number(p.silver||0), c=Number(p.copper||0); return `<span style='color:#00c2ff;font-weight:700'>${d}钻</span> <span style='color:#d4af37;font-weight:700'>${g}金</span> <span style='color:#c0c0c0;font-weight:700'>${s}银</span> <span style='color:#cd7f32;font-weight:700'>${String(c).padStart(2,'0')}铜</span>`; }
 async function queryMagicHistory(ev){ const btn=ev?.target; setLoading(btn,true); let d={ok:false}; try{ d=await fetch('/api/self_magic/history?limit=0').then(r=>r.json()); }catch(e){ d={ok:false,error:'请求失败'}; } setLoading(btn,false); if(!d.ok){ toast(`查询失败：${d.error||'unknown'}`, false); return; } const stats=[['放魔成功总记录', d.count||0],['今日论坛币消耗', `${forumCoin(d.ucSpentTodayParts)} <span class='k'>(铜币 ${Number(d.ucSpentTodayCopper||0).toFixed(2)})</span>`],['历史论坛币总消耗', `${forumCoin(d.ucSpentTotalParts)} <span class='k'>(铜币 ${Number(d.ucSpentTotalCopper||0).toFixed(2)})</span>`]]; const cards = stats.map(([k,v])=>`<div class='mh-stat'><div class='k'>${esc(k)}</div><div class='v'>${v}</div></div>`).join(''); const rows=(d.items||[]).map(x=>`<tr><td>${esc(x.time)}</td><td>${esc(x.tid)}</td><td><code>${esc(x.hash)}</code></td><td>${forumCoin(x.ucParts)} <span class='k'>(铜币 ${Number(x.ucCopper||0).toFixed(2)})</span></td></tr>`).join('') || `<tr><td colspan='4' class='k'>暂无记录</td></tr>`; openMagicHistoryModal(`<div class='mh-grid'>${cards}</div><div class='k' style='margin:8px 0 6px 0'>放魔明细（全量）</div><div class='mh-table-wrap'><table class='mh-table'><thead><tr><th>时间</th><th>TID</th><th>Hash</th><th>消耗</th></tr></thead><tbody>${rows}</tbody></table></div>`); }
