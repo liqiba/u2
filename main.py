@@ -31,7 +31,7 @@ STATE_PATH = DATA_DIR / 'state.json'
 UPGRADE_REQUEST_PATH = DATA_DIR / 'upgrade.request.json'
 UPGRADE_STATUS_PATH = DATA_DIR / 'upgrade.status.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.104'
+APP_VERSION = '2026.3.105'
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / 'templates'
 STATIC_DIR = BASE_DIR / 'static'
@@ -1672,7 +1672,7 @@ def legacy_index():
 </head>
 <body>
   <div class='wrap'>
-    <div class='title'><h2>Catch Magic Web <span style='font-size:13px;color:var(--sub);font-weight:500'>v__APP_VERSION__</span></h2><div class='actions'><button class='ghost' type='button' onclick="openConfigPage('base')">基础配置</button><button class='ghost' type='button' onclick="openConfigPage('tg')">TG配置</button><button class='ghost compact' type='button' onclick="openConfigPage('magic');return false;">魔法配置</button><button class='ghost compact' type='button' onclick='runSelfMagicOnce()'>手动魔法</button><button class='ghost compact' type='button' onclick='retryFailedPushes()'>失败重推</button><button class='ghost' type='button' onclick='toggleTheme()'>🌗 主题切换</button><div class='badge' id='runBadge'>状态读取中...</div></div></div>
+    <div class='title'><h2>Catch Magic Web <span style='font-size:13px;color:var(--sub);font-weight:500'>v__APP_VERSION__</span></h2><div class='actions'><button class='ghost' type='button' onclick="openConfigPage('base')">基础配置</button><button class='ghost' type='button' onclick="openConfigPage('tg')">TG配置</button><button class='ghost compact' type='button' onclick="openConfigPage('magic');return false;">魔法配置</button><button class='ghost compact' type='button' onclick="openConfigPage('qb')">qB配置</button><button class='ghost compact' type='button' onclick="openConfigPage('security')">访问密码</button><button class='ghost compact' type='button' onclick="openConfigPage('theme')">主题</button><button class='ghost compact' type='button' onclick='runSelfMagicOnce()'>手动魔法</button><button class='ghost compact' type='button' onclick='retryFailedPushes()'>失败重推</button><div class='badge' id='runBadge'>状态读取中...</div></div></div>
     <div id='app' class='grid'>loading...</div>
   </div>
 <script>
@@ -1776,33 +1776,11 @@ async function load(){
 
  <div class='card'><div class='k' style='margin-bottom:8px'>最近日志（最多 200 行）</div><pre id='logs'>loading logs...</pre></div>
 </div>`;
- setTGForm(c);
  await refreshQbStats();
  if(qbStatsTimer) clearInterval(qbStatsTimer);
  qbStatsTimer = setInterval(refreshQbStats, 8000);
  logCursor = 0;
  setTimeout(()=>refreshLogs(true), 0);
-}
-async function save(){
- const body={
-  enabled:document.getElementById('enabled').checked,
-  interval:parseInt(document.getElementById('interval').value||'120'),
-  u2_api_base:document.getElementById('u2_api_base').value.trim(),
-  u2_api_token:document.getElementById('u2_api_token').value.trim(),
-  u2_passkey:document.getElementById('u2_passkey').value.trim(),
-  scope:document.getElementById('scope').value,
-  limit:parseInt(document.getElementById('limit').value||'20'),
-  max_seeders:parseInt(document.getElementById('max_seeders')?.value||'5'),
-  download_non_free:false,
-  qb_mode:document.getElementById('qb_mode').value,
-  qb_up_limit_mb:parseInt(document.getElementById('qb_up_limit_mb').value||'50'),
-  require_2x_free:document.getElementById('require_2x_free')?.checked!==false,
-
-  qb_clients:qbClients,
-  ...collectTG(),
- };
- await fetch('/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
- alert('配置已保存'); load();
 }
 async function testTG(){ const r=await fetch('/api/tg/test',{method:'POST'}); const d=await r.json(); alert(d.ok?('测试通知已发送：'+(d.message||'')):('测试通知失败：'+(d.error||'unknown'))); }
 async function runNow(){ await fetch('/api/run',{method:'POST'}); setTimeout(load, 900); }
@@ -1881,7 +1859,7 @@ CONFIG_PAGE_HTML = """
       </div>
       <div style='display:flex;gap:8px;flex-wrap:wrap'>
         <button class='ghost' type='button' onclick='window.close()'>关闭窗口</button>
-        <button class='ghost' type='button' onclick='toggleTheme()'>🌗 主题切换</button>
+
       </div>
     </div>
     <div id='app' class='card'>加载中...</div>
@@ -1988,7 +1966,27 @@ async function saveQB(){ const c=await j('/api/config'); syncQBFromForm(); const
 async function runNow(){ await fetch('/api/run',{method:'POST'}); alert('已触发立即执行'); }
 async function testTG(){ const r=await fetch('/api/tg/test',{method:'POST'}); const d=await r.json(); alert(d.ok?('测试通知已发送：'+(d.message||'')):('测试通知失败：'+(d.error||'unknown'))); }
 async function runSelfMagicOnce(){ const r=await fetch('/api/self_magic/once',{method:'POST'}); const d=await r.json(); if(!d.ok){ alert('手动自放失败：'+(d.error||'未知错误')); return;} alert(`手动自放完成：${d.msg||('成功'+(d.done||0)+'条')}`); }
-async function render(){ applyTheme(); const c=await j('/api/config'); qbClients=JSON.parse(JSON.stringify(c.qb_clients||[])); const app=document.getElementById('app'); if(PAGE_KIND==='base') app.innerHTML=renderBase(c); else if(PAGE_KIND==='tg') app.innerHTML=renderTG(c); else if(PAGE_KIND==='magic') app.innerHTML=renderMagic(c); else if(PAGE_KIND==='qb') app.innerHTML=renderQB(c); else app.innerHTML="<div class='tip'>未知配置页面</div>"; }
+function renderSecurity(c){
+  document.getElementById('pageTitle').textContent='访问密码';
+  return `
+  <div class='editor-grid'>
+    <div class='full'><label>新密码</label><input id='security_password' type='password' autocomplete='new-password' placeholder='至少 6 位'></div>
+    <div class='full'><label>删除密码时输入当前密码</label><input id='security_current_password' type='password' autocomplete='current-password' placeholder='仅删除时需要'></div>
+    <div class='full tip'>当前状态：${c.web_auth_enabled ? '已启用访问密码' : '未启用访问密码'}</div>
+  </div>
+  <div class='actions'><button onclick='saveSecurityPassword()'>设置/更新访问密码</button><button class='ghost' onclick='deleteSecurityPassword()'>删除访问密码</button></div>`;
+}
+function renderTheme(){
+  document.getElementById('pageTitle').textContent='主题';
+  const current = getTheme()==='light' ? '浅色' : '深色';
+  return `
+  <div class='tip'>当前主题：${current}</div>
+  <div class='actions'><button onclick="setThemeMode('dark')">切换深色主题</button><button class='ghost' onclick="setThemeMode('light')">切换浅色主题</button></div>`;
+}
+function setThemeMode(mode){ localStorage.setItem('cm_theme', mode); applyTheme(); alert('主题已切换'); }
+async function saveSecurityPassword(){ const password=(document.getElementById('security_password')?.value||'').trim(); const r=await fetch('/api/security/password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password})}); const d=await r.json(); if(!d.ok){ alert('设置失败：'+(d.error||'未知错误')); return;} alert('访问密码已设置'); }
+async function deleteSecurityPassword(){ const current_password=(document.getElementById('security_current_password')?.value||'').trim(); const r=await fetch('/api/security/password/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({current_password})}); const d=await r.json(); if(!d.ok){ alert('删除失败：'+(d.error||'未知错误')); return;} alert('访问密码已删除'); }
+async function render(){ applyTheme(); const c=await j('/api/config'); qbClients=JSON.parse(JSON.stringify(c.qb_clients||[])); const app=document.getElementById('app'); if(PAGE_KIND==='base') app.innerHTML=renderBase(c); else if(PAGE_KIND==='tg') app.innerHTML=renderTG(c); else if(PAGE_KIND==='magic') app.innerHTML=renderMagic(c); else if(PAGE_KIND==='qb') app.innerHTML=renderQB(c); else if(PAGE_KIND==='security') app.innerHTML=renderSecurity(c); else if(PAGE_KIND==='theme') app.innerHTML=renderTheme(); else app.innerHTML="<div class='tip'>未知配置页面</div>"; }
 render();
 </script>
 </body>
@@ -2008,6 +2006,8 @@ def config_page(kind: str):
         'tg': 'TG配置',
         'magic': '魔法配置',
         'qb': 'qB配置',
+        'security': '访问密码',
+        'theme': '主题',
     }
     if kind not in mapping:
         return HTMLResponse('Not Found', status_code=404)
