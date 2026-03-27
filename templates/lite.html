@@ -12,26 +12,17 @@
     <div class="top">
       <h2><a href="/" class="logo" title="返回首页">🦞 Catch Magic Lite</a> <small>v{{ version }}</small></h2>
       <div class="row">
-        <button class="btn" onclick="openPopupCfg('base')">基础配置</button>
-        <button class="btn" onclick="openPopupCfg('tg')">TG配置</button>
-        <button class="btn" onclick="openPopupCfg('magic')">魔法配置</button>
-        <button class="btn" onclick="openPopupCfg('qb')">qB配置</button>
-        <button class="btn" onclick="openPopupCfg('security')">访问密码</button>
-        <button class="btn" onclick="openPopupCfg('theme')">🌗 主题</button>
+        <button class="btn tab-btn active" data-tab="overview" onclick="switchTab('overview', event)">总览</button>
+        <button class="btn tab-btn" data-tab="base" onclick="switchTab('base', event)">基础配置</button>
+        <button class="btn tab-btn" data-tab="tg" onclick="switchTab('tg', event)">TG配置</button>
+        <button class="btn tab-btn" data-tab="magic" onclick="switchTab('magic', event)">魔法配置</button>
+        <button class="btn tab-btn" data-tab="qbconfig" onclick="switchTab('qbconfig', event)">qB配置</button>
+        <button class="btn tab-btn" data-tab="security" onclick="switchTab('security', event)">访问密码</button>
+        <button class="btn tab-btn" data-tab="theme" onclick="switchTab('theme', event)">主题</button>
       </div>
     </div>
 
     <div id="toast" class="toast hide"></div>
-
-    <div id="cfg-popup" class="modal hide" onclick="if(event.target===this) closePopupCfg()">
-      <div class="modal-card">
-        <div class="modal-head">
-          <h3 id="cfg-popup-title">配置</h3>
-          <button class="btn" onclick="closePopupCfg()">关闭</button>
-        </div>
-        <div id="cfg-popup-body" class="modal-body"></div>
-      </div>
-    </div>
 
     <div id="magic-history-modal" class="modal hide" onclick="if(event.target===this) closeMagicHistoryModal()">
       <div class="modal-card">
@@ -43,36 +34,49 @@
       </div>
     </div>
 
-    <section id="status" hx-get="/partials/status" hx-trigger="load, every 8s" hx-swap="innerHTML">
-      <div class="card">加载中...</div>
-    </section>
+    <section id="workspace-panel" class="card tab-panel"></section>
 
-    <section>
-      <div class="row-between"><h3>qB 看板</h3><span class="k">自动刷新 8s</span></div>
-      <div id="qb" hx-get="/partials/qb" hx-trigger="load, every 8s" hx-swap="innerHTML">
+    <section id="overview-panel" class="tab-panel active">
+      <section id="status" hx-get="/partials/status" hx-trigger="load, every 8s" hx-swap="innerHTML">
         <div class="card">加载中...</div>
-      </div>
-    </section>
-
-    <section>
-      <div class="row-between"><h3>最近日志（增量）</h3><button class="btn" id="refresh-logs-btn">刷新</button></div>
-      <pre id="logs" class="log">loading...</pre>
+      </section>
+      <section>
+        <div class="row-between"><h3>qB 看板</h3><span class="k">自动刷新 8s</span></div>
+        <div id="qb" hx-get="/partials/qb" hx-trigger="load, every 8s" hx-swap="innerHTML">
+          <div class="card">加载中...</div>
+        </div>
+      </section>
+      <section>
+        <div class="row-between"><h3>最近日志（增量）</h3><button class="btn" id="refresh-logs-btn">刷新</button></div>
+        <pre id="logs" class="log">loading...</pre>
+      </section>
     </section>
   </div>
 <script>
 let cfg=null;
 let logCursor=0;
 let logTimer=null;
+let currentTab='overview';
 function el(id){ return document.getElementById(id); }
 function esc(s){return (s??'').toString().replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
 function getTheme(){ return localStorage.getItem('cm_theme')||'dark'; }
 function applyTheme(){ document.body.classList.toggle('theme-light', getTheme()==='light'); }
-function toggleTheme(){ localStorage.setItem('cm_theme', getTheme()==='light'?'dark':'light'); applyTheme(); }
 function toast(msg, ok=true){ const t=el('toast'); if(!t) return; t.textContent=msg; t.className='toast '+(ok?'ok':'err'); setTimeout(()=>t.className='toast hide',2200); }
 function setLoading(btn, on){ if(!btn) return; btn.disabled=!!on; btn.dataset.old=btn.dataset.old||btn.textContent; btn.textContent=on?'处理中...':btn.dataset.old; }
 function validUrl(u){ try{ const x=new URL(u); return x.protocol==='http:'||x.protocol==='https:'; }catch(e){ return false; } }
 async function getCfg(){ if(cfg) return cfg; cfg = await fetch('/api/config').then(r=>r.json()); return cfg; }
-function closePopupCfg(){ el('cfg-popup')?.classList.add('hide'); }
+async function putCfg(patch, btn){
+  const c = await getCfg();
+  cfg = {...c, ...patch};
+  setLoading(btn,true);
+  let r={ok:false,error:'请求失败'};
+  try{
+    r = await fetch('/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg)}).then(r=>r.json());
+  }catch(e){ r={ok:false,error:'网络错误，请重试'}; }
+  setLoading(btn,false);
+  if(r.ok){ toast('保存成功', true); cfg=null; }
+  else toast(`保存失败：${r.error||'unknown'}`, false);
+}
 function collectQB(){
   const arr=(cfg?.qb_clients||[]).map(x=>({...x}));
   document.querySelectorAll('[data-qb]').forEach(n=>{
@@ -83,139 +87,46 @@ function collectQB(){
   });
   return arr;
 }
-async function putCfg(patch, btn){
-  const c = await getCfg();
-  cfg = {...c, ...patch};
-  setLoading(btn,true);
-  let r={ok:false,error:'请求失败'};
-  try{
-    const ctl=new AbortController();
-    const tm=setTimeout(()=>ctl.abort(), 12000);
-    r = await fetch('/api/config',{
-      method:'PUT',
-      headers:{'Content-Type':'application/json'},
-      body:JSON.stringify(cfg),
-      signal:ctl.signal,
-    }).then(r=>r.json());
-    clearTimeout(tm);
-  }catch(e){
-    r={ok:false,error:(e && e.name==='AbortError')?'保存超时，请重试':'网络错误，请重试'};
-  }finally{
-    setLoading(btn,false);
-  }
-  if(r.ok){ toast('保存成功', true); cfg=null; }
-  else toast(`保存失败：${r.error||'unknown'}`, false);
-}
 function renderQBEditor(){
   const box=el('qb-editor'); if(!box) return;
   const arr=(cfg?.qb_clients||[]);
-  box.innerHTML = arr.map((q,i)=>`
-    <div class='card' style='margin-bottom:8px'>
-      <div class='row-between'><b>${esc(q.name||('qb-'+(i+1)))}</b><div class='row'><button class='btn' onclick='copyQB(${i})'>复制</button><button class='btn' onclick='testQB(${i}, event)'>连通测试</button><button class='btn' onclick='removeQB(${i})'>删除</button></div></div>
-      <div class='grid grid-3'>
-        <div><div class='k'>名称</div><input data-qb='name' data-i='${i}' value='${esc(q.name||'')}'></div>
-        <div><div class='k'>启用</div><input data-qb='enabled' data-i='${i}' type='checkbox' ${q.enabled!==false?'checked':''}></div>
-        <div><div class='k'>URL</div><input data-qb='qb_url' data-i='${i}' value='${esc(q.qb_url||'http://127.0.0.1:8080')}'></div>
-        <div><div class='k'>用户名</div><input data-qb='qb_username' data-i='${i}' value='${esc(q.qb_username||'')}'></div>
-        <div><div class='k'>密码</div><input data-qb='qb_password' data-i='${i}' value='${esc(q.qb_password||'')}'></div>
-        <div><div class='k'>分类</div><input data-qb='qb_category' data-i='${i}' value='${esc(q.qb_category||'')}'></div>
-        <div class='full'><div class='k'>保存路径</div><input data-qb='qb_savepath' data-i='${i}' value='${esc(q.qb_savepath||'')}'></div>
-      </div>
-    </div>`).join('') || '<div class="k">暂无 qB，点击“新增”创建。</div>';
+  box.innerHTML = arr.map((q,i)=>`<div class='card' style='margin-bottom:10px'><div class='row-between'><b>${esc(q.name||('qb-'+(i+1)))}</b><div class='row'><button class='btn' onclick='copyQB(${i})'>复制</button><button class='btn' onclick='testQB(${i}, event)'>连通测试</button><button class='btn' onclick='removeQB(${i})'>删除</button></div></div><div class='grid grid-3'><div><div class='k'>名称</div><input data-qb='name' data-i='${i}' value='${esc(q.name||'')}'></div><div><div class='k'>启用</div><input data-qb='enabled' data-i='${i}' type='checkbox' ${q.enabled!==false?'checked':''}></div><div><div class='k'>URL</div><input data-qb='qb_url' data-i='${i}' value='${esc(q.qb_url||'http://127.0.0.1:8080')}'></div><div><div class='k'>用户名</div><input data-qb='qb_username' data-i='${i}' value='${esc(q.qb_username||'')}'></div><div><div class='k'>密码</div><input data-qb='qb_password' data-i='${i}' value='${esc(q.qb_password||'')}'></div><div><div class='k'>分类</div><input data-qb='qb_category' data-i='${i}' value='${esc(q.qb_category||'')}'></div><div class='full'><div class='k'>保存路径</div><input data-qb='qb_savepath' data-i='${i}' value='${esc(q.qb_savepath||'')}'></div></div></div>`).join('') || '<div class="k">暂无 qB，点击“新增”创建。</div>';
 }
 function addQB(){ cfg.qb_clients = cfg.qb_clients||[]; cfg.qb_clients.push({name:'qb-new',enabled:true,qb_url:'http://127.0.0.1:8080',qb_username:'',qb_password:'',qb_category:'',qb_savepath:'',qb_paused:false}); renderQBEditor(); }
 function copyQB(i){ const src=(cfg.qb_clients||[])[i]; if(!src) return; cfg.qb_clients.push({...src, name:(src.name||'qb')+'-copy'}); renderQBEditor(); toast('已复制节点', true); }
 function removeQB(i){ cfg.qb_clients.splice(i,1); renderQBEditor(); }
-async function testQB(i, ev){
-  const arr=collectQB();
-  const q=arr[i];
-  if(!q || !validUrl((q.qb_url||'').trim())){ toast('请先填写合法 qB URL', false); return; }
-  setLoading(ev?.target,true);
-  const d=await fetch('/api/qb/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({client:q})}).then(r=>r.json()).catch(()=>({ok:false,error:'请求失败'}));
-  setLoading(ev?.target,false);
-  if(d.ok) toast(`${q.name||'qB'} 连通成功`, true); else toast(`${q.name||'qB'} 连通失败: ${d.error||'未知错误'}`, false);
-}
-async function saveAuth(ev){
-  const password = (el('a_password').value||'').trim();
-  if(!password){ toast('请输入新密码', false); return; }
-  setLoading(ev?.target, true);
-  let d={ok:false,error:'请求失败'};
-  try{ d = await fetch('/api/security/password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password})}).then(r=>r.json()); }catch(e){}
-  setLoading(ev?.target, false);
-  if(d.ok){ cfg=null; toast('访问密码设置成功', true); } else toast(`保存失败：${d.error||'unknown'}`, false);
-}
-async function deleteAuthPassword(ev){
-  if(!confirm('确认删除访问密码？删除后将恢复免密访问。')) return;
-  const currentPassword = prompt('请输入当前密码以确认删除：');
-  if(currentPassword===null) return;
-  if(!currentPassword.trim()){ toast('请输入当前密码', false); return; }
-  setLoading(ev?.target, true);
-  let d={ok:false,error:'请求失败'};
-  try{ d = await fetch('/api/security/password/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({current_password: currentPassword.trim()})}).then(r=>r.json()); }catch(e){}
-  setLoading(ev?.target, false);
-  if(d.ok){ cfg=null; toast('访问密码已删除，已恢复免密访问', true); } else toast(`删除失败：${d.error||'unknown'}`, false);
-}
+async function testQB(i, ev){ const arr=collectQB(); const q=arr[i]; if(!q || !validUrl((q.qb_url||'').trim())){ toast('请先填写合法 qB URL', false); return; } setLoading(ev?.target,true); const d=await fetch('/api/qb/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({client:q})}).then(r=>r.json()).catch(()=>({ok:false,error:'请求失败'})); setLoading(ev?.target,false); if(d.ok) toast(`${q.name||'qB'} 连通成功`, true); else toast(`${q.name||'qB'} 连通失败: ${d.error||'未知错误'}`, false); }
+async function saveAuth(ev){ const password = (el('a_password').value||'').trim(); if(!password){ toast('请输入新密码', false); return; } setLoading(ev?.target, true); let d={ok:false,error:'请求失败'}; try{ d = await fetch('/api/security/password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password})}).then(r=>r.json()); }catch(e){} setLoading(ev?.target, false); if(d.ok){ cfg=null; toast('访问密码设置成功', true); } else toast(`保存失败：${d.error||'unknown'}`, false); }
+async function deleteAuthPassword(ev){ if(!confirm('确认删除访问密码？删除后将恢复免密访问。')) return; const currentPassword = prompt('请输入当前密码以确认删除：'); if(currentPassword===null) return; if(!currentPassword.trim()){ toast('请输入当前密码', false); return; } setLoading(ev?.target, true); let d={ok:false,error:'请求失败'}; try{ d = await fetch('/api/security/password/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({current_password: currentPassword.trim()})}).then(r=>r.json()); }catch(e){} setLoading(ev?.target, false); if(d.ok){ cfg=null; toast('访问密码已删除，已恢复免密访问', true); } else toast(`删除失败：${d.error||'unknown'}`, false); }
 async function logoutNow(ev){ setLoading(ev?.target, true); try{ await fetch('/auth/logout',{method:'POST'}); }catch(e){} setLoading(ev?.target, false); location.href='/login'; }
-async function runMagicOnce(ev){
-  const btn=ev?.target; setLoading(btn,true);
-  let d={ok:false,error:'请求失败'};
-  try{ d=await fetch('/api/self_magic/once',{method:'POST'}).then(r=>r.json()); }catch(e){}
-  setLoading(btn,false);
-  if(d.ok) toast(`手动魔法完成：${d.msg||('成功'+(d.done||0)+'条')}`, true); else toast(`手动魔法失败：${d.error||'未知错误'}`, false);
-}
+async function runMagicOnce(ev){ const btn=ev?.target; setLoading(btn,true); let d={ok:false,error:'请求失败'}; try{ d=await fetch('/api/self_magic/once',{method:'POST'}).then(r=>r.json()); }catch(e){} setLoading(btn,false); if(d.ok) toast(`手动魔法完成：${d.msg||('成功'+(d.done||0)+'条')}`, true); else toast(`手动魔法失败：${d.error||'未知错误'}`, false); }
 function closeMagicHistoryModal(){ el('magic-history-modal')?.classList.add('hide'); }
 function openMagicHistoryModal(html){ el('magic-history-content').innerHTML = html; el('magic-history-modal')?.classList.remove('hide'); }
 function forumCoin(parts){ const p=parts||{}; const d=Number(p.gem||0), g=Number(p.gold||0), s=Number(p.silver||0), c=Number(p.copper||0); return `<span style='color:#00c2ff;font-weight:700'>${d}钻</span> <span style='color:#d4af37;font-weight:700'>${g}金</span> <span style='color:#c0c0c0;font-weight:700'>${s}银</span> <span style='color:#cd7f32;font-weight:700'>${String(c).padStart(2,'0')}铜</span>`; }
-async function queryMagicHistory(ev){
-  const btn=ev?.target; setLoading(btn,true); let d={ok:false};
-  try{ d=await fetch('/api/self_magic/history?limit=0').then(r=>r.json()); }catch(e){ d={ok:false,error:'请求失败'}; }
-  setLoading(btn,false); if(!d.ok){ toast(`查询失败：${d.error||'unknown'}`, false); return; }
-  const stats=[['放魔成功总记录', d.count||0],['今日论坛币消耗', `${forumCoin(d.ucSpentTodayParts)} <span class='k'>(铜币 ${Number(d.ucSpentTodayCopper||0).toFixed(2)})</span>`],['历史论坛币总消耗', `${forumCoin(d.ucSpentTotalParts)} <span class='k'>(铜币 ${Number(d.ucSpentTotalCopper||0).toFixed(2)})</span>`],['今日失败次数', d.failToday||0],['历史失败次数', d.failTotal||0],['今日日限跳过(tid)', d.dailyLimitToday||0],['历史日限跳过(tid)', d.dailyLimitTotal||0]];
-  const cards = stats.map(([k,v])=>`<div class='mh-stat'><div class='k'>${esc(k)}</div><div class='v'>${v}</div></div>`).join('');
-  const rows=(d.items||[]).map(x=>`<tr><td>${esc(x.time)}</td><td>${esc(x.tid)}</td><td><code>${esc(x.hash)}</code></td><td>${forumCoin(x.ucParts)} <span class='k'>(铜币 ${Number(x.ucCopper||0).toFixed(2)})</span></td></tr>`).join('') || `<tr><td colspan='4' class='k'>暂无记录</td></tr>`;
-  openMagicHistoryModal(`<div class='mh-grid'>${cards}</div><div class='k' style='margin:8px 0 6px 0'>放魔明细（全量）</div><div class='mh-table-wrap'><table class='mh-table'><thead><tr><th>时间</th><th>TID</th><th>Hash</th><th>消耗</th></tr></thead><tbody>${rows}</tbody></table></div>`);
-}
-async function openPopupCfg(kind){
+async function queryMagicHistory(ev){ const btn=ev?.target; setLoading(btn,true); let d={ok:false}; try{ d=await fetch('/api/self_magic/history?limit=0').then(r=>r.json()); }catch(e){ d={ok:false,error:'请求失败'}; } setLoading(btn,false); if(!d.ok){ toast(`查询失败：${d.error||'unknown'}`, false); return; } const stats=[['放魔成功总记录', d.count||0],['今日论坛币消耗', `${forumCoin(d.ucSpentTodayParts)} <span class='k'>(铜币 ${Number(d.ucSpentTodayCopper||0).toFixed(2)})</span>`],['历史论坛币总消耗', `${forumCoin(d.ucSpentTotalParts)} <span class='k'>(铜币 ${Number(d.ucSpentTotalCopper||0).toFixed(2)})</span>`]]; const cards = stats.map(([k,v])=>`<div class='mh-stat'><div class='k'>${esc(k)}</div><div class='v'>${v}</div></div>`).join(''); const rows=(d.items||[]).map(x=>`<tr><td>${esc(x.time)}</td><td>${esc(x.tid)}</td><td><code>${esc(x.hash)}</code></td><td>${forumCoin(x.ucParts)} <span class='k'>(铜币 ${Number(x.ucCopper||0).toFixed(2)})</span></td></tr>`).join('') || `<tr><td colspan='4' class='k'>暂无记录</td></tr>`; openMagicHistoryModal(`<div class='mh-grid'>${cards}</div><div class='k' style='margin:8px 0 6px 0'>放魔明细（全量）</div><div class='mh-table-wrap'><table class='mh-table'><thead><tr><th>时间</th><th>TID</th><th>Hash</th><th>消耗</th></tr></thead><tbody>${rows}</tbody></table></div>`); }
+function renderWorkspace(html){ el('workspace-panel').innerHTML = html; }
+async function switchTab(tab, ev){
+  currentTab=tab;
+  document.querySelectorAll('.tab-btn').forEach(btn=>btn.classList.remove('active'));
+  if(ev?.target) ev.target.classList.add('active'); else { const btn=document.querySelector(`.tab-btn[data-tab="${tab}"]`); if(btn) btn.classList.add('active'); }
+  const overview=el('overview-panel'); const workspace=el('workspace-panel');
+  if(tab==='overview'){ overview.classList.add('active'); workspace.classList.remove('active'); workspace.innerHTML=''; return; }
+  overview.classList.remove('active'); workspace.classList.add('active');
   const c=await getCfg(); cfg=c;
-  const box=el('cfg-popup-body'); const title=el('cfg-popup-title');
-  if(!box||!title) return;
-  if(kind==='base'){
-    title.textContent='基础配置';
-    box.innerHTML=`<div class='grid grid-3'><div><div class='k'>启用任务</div><input id='b_enabled' type='checkbox' ${c.enabled?'checked':''}></div><div><div class='k'>间隔(秒)</div><input id='b_interval' type='number' min='10' value='${c.interval||120}'></div><div><div class='k'>抓取条数(limit)</div><input id='b_limit' type='number' min='1' max='60' value='${c.limit||20}'></div><div><div class='k'>最大做种人数</div><input id='b_max_seeders' type='number' min='0' value='${c.max_seeders??5}'></div><div><div class='k'>qB分发模式</div><select id='b_qb_mode'><option value='round_robin' ${(c.qb_mode||'round_robin')==='round_robin'?'selected':''}>轮询</option><option value='all' ${(c.qb_mode||'round_robin')==='all'?'selected':''}>全部推送</option></select></div><div><div class='k'>单种上传限速(MB/s)</div><input id='b_qb_up_limit_mb' type='number' min='0' value='${c.qb_up_limit_mb??50}'></div><div class='full'><div class='k'>U2 API Base</div><input id='b_u2_api_base' value='${esc(c.u2_api_base||'')}'></div><div class='full'><div class='k'>U2 API Token</div><input id='b_u2_api_token' type='password' value='${esc(c.u2_api_token||'')}'></div><div class='full'><div class='k'>U2 Passkey</div><input id='b_u2_passkey' type='password' value='${esc(c.u2_passkey||'')}'></div><div><div class='k'>魔法范围</div><select id='b_scope'><option value='public' ${(c.scope||'public')==='public'?'selected':''}>public</option><option value='all' ${(c.scope||'public')==='all'?'selected':''}>all</option><option value='private' ${(c.scope||'public')==='private'?'selected':''}>private</option><option value='global' ${(c.scope||'public')==='global'?'selected':''}>global</option></select></div><div><div class='k'>仅抓 2XFree</div><input id='b_require_2x_free' type='checkbox' ${c.require_2x_free!==false?'checked':''}></div></div><div class='row' style='margin-top:10px'><button class='btn' onclick="putCfg({enabled:el('b_enabled').checked,interval:parseInt(el('b_interval').value||'120'),limit:parseInt(el('b_limit').value||'20'),max_seeders:parseInt(el('b_max_seeders').value||'5'),qb_mode:el('b_qb_mode').value,qb_up_limit_mb:parseInt(el('b_qb_up_limit_mb').value||'50'),u2_api_base:el('b_u2_api_base').value.trim(),u2_api_token:el('b_u2_api_token').value.trim(),u2_passkey:el('b_u2_passkey').value.trim(),scope:el('b_scope').value,require_2x_free:el('b_require_2x_free').checked}, event.target)">保存基础配置</button></div>`;
-  } else if(kind==='tg'){
-    title.textContent='TG配置';
-    box.innerHTML=`<div class='grid grid-2'><div><div class='k'>启用</div><input id='t_enabled' type='checkbox' ${c.tg_enabled?'checked':''}></div><div><div class='k'>chat id</div><input id='t_chat' value='${esc(c.tg_chat_id||'')}'></div><div class='full'><div class='k'>bot token</div><input id='t_token' value='${esc(c.tg_bot_token||'')}'></div></div><div class='row' style='margin-top:10px'><button class='btn' onclick="putCfg({tg_enabled:el('t_enabled').checked, tg_chat_id:el('t_chat').value.trim(), tg_bot_token:el('t_token').value.trim()}, event.target)">保存TG配置</button></div>`;
-  } else if(kind==='magic'){
-    title.textContent='魔法配置';
-    box.innerHTML=`<div class='grid grid-3'><div><div class='k'>启用自动魔法</div><input id='m_enabled' type='checkbox' ${c.auto_self_magic_enabled?'checked':''}></div><div><div class='k'>检查间隔(秒)</div><input id='m_interval' type='number' min='10' value='${c.auto_self_magic_interval||60}'></div><div><div class='k'>最小上传(KiB/s)</div><input id='m_minup' type='number' min='1' value='${c.auto_self_magic_min_upload_kib||1024}'></div><div><div class='k'>最小体积(GB)</div><input id='m_minsize' type='number' min='1' value='${c.auto_self_magic_min_size_gb||5}'></div><div><div class='k'>最大体积(GB,0=不限)</div><input id='m_maxsize' type='number' min='0' value='${c.auto_self_magic_max_size_gb||0}'></div><div><div class='k'>最小生存天数</div><input id='m_mind' type='number' min='0' value='${c.auto_self_magic_min_d??30}'></div><div><div class='k'>魔法时长(小时)</div><input id='m_hours' type='number' min='1' max='360' value='${c.auto_self_magic_hours??24}'></div><div><div class='k'>包含下载中</div><input id='m_allow_down' type='checkbox' ${c.auto_self_magic_magic_downloading!==false?'checked':''}></div><div><div class='k'>U2 UID</div><input id='m_uid' type='number' min='0' value='${c.u2_uid??0}'></div><div class='full'><div class='k'>U2 Cookie(nexusphp_u2)</div><input id='m_cookie' type='password' value='${esc(c.u2_cookie||'')}'></div></div><div class='row' style='margin-top:10px'><button class='btn' onclick="putCfg({auto_self_magic_enabled:el('m_enabled').checked,auto_self_magic_interval:parseInt(el('m_interval').value||'60'),auto_self_magic_min_upload_kib:parseInt(el('m_minup').value||'1024'),auto_self_magic_min_size_gb:parseInt(el('m_minsize').value||'5'),auto_self_magic_max_size_gb:parseInt(el('m_maxsize').value||'0'),auto_self_magic_min_d:parseInt(el('m_mind').value||'30'),auto_self_magic_hours:parseInt(el('m_hours').value||'24'),auto_self_magic_magic_downloading:el('m_allow_down').checked,u2_uid:parseInt(el('m_uid').value||'0'),u2_cookie:el('m_cookie').value.trim()}, event.target)">保存魔法配置</button><button class='btn' onclick='runMagicOnce(event)'>手动魔法</button><button class='btn' onclick='queryMagicHistory(event)'>查询放魔记录</button></div>`;
-  } else if(kind==='qb'){
-    title.textContent='qB配置';
-    box.innerHTML=`<div id='qb-editor'></div><div class='row' style='margin-top:10px'><button class='btn' onclick='addQB()'>+ 新增</button><button class='btn' onclick='saveQBAll(event)'>保存qB配置</button></div>`;
-    renderQBEditor();
-  } else if(kind==='security'){
-    title.textContent='访问密码';
-    box.innerHTML=`<div class='grid grid-2'><div><div class='k'>当前状态</div><div class='v'>${c.web_auth_enabled?'已启用（需登录）':'未启用（可直接访问）'}</div></div><div><div class='k'>说明</div><div class='v'>设置密码后将强制登录；删除密码后恢复免密访问</div></div><div class='full'><div class='k'>新密码</div><input id='a_password' type='password' placeholder='至少6位'></div></div><div class='row' style='margin-top:10px'><button class='btn' onclick='saveAuth(event)'>设置/更新密码</button><button class='btn' onclick='deleteAuthPassword(event)'>删除密码（恢复免密）</button><button class='btn' onclick='logoutNow(event)'>退出登录</button></div>`;
-  } else if(kind==='theme'){
-    title.textContent='主题';
-    box.innerHTML=`<div class='row'><button class='btn' onclick="toggleTheme();toast('主题已切换',true)">切换主题</button></div>`;
-  }
-  el('cfg-popup').classList.remove('hide');
+  if(tab==='base') renderWorkspace(`<div class='grid grid-3'><div><div class='k'>启用任务</div><input id='b_enabled' type='checkbox' ${c.enabled?'checked':''}></div><div><div class='k'>间隔(秒)</div><input id='b_interval' type='number' min='10' value='${c.interval||120}'></div><div><div class='k'>抓取条数(limit)</div><input id='b_limit' type='number' min='1' max='60' value='${c.limit||20}'></div><div><div class='k'>最大做种人数</div><input id='b_max_seeders' type='number' min='0' value='${c.max_seeders??5}'></div><div><div class='k'>qB分发模式</div><select id='b_qb_mode'><option value='round_robin' ${(c.qb_mode||'round_robin')==='round_robin'?'selected':''}>轮询</option><option value='all' ${(c.qb_mode||'round_robin')==='all'?'selected':''}>全部推送</option></select></div><div><div class='k'>单种上传限速(MB/s)</div><input id='b_qb_up_limit_mb' type='number' min='0' value='${c.qb_up_limit_mb??50}'></div><div class='full'><div class='k'>U2 API Base</div><input id='b_u2_api_base' value='${esc(c.u2_api_base||'')}'></div><div class='full'><div class='k'>U2 API Token</div><input id='b_u2_api_token' type='password' value='${esc(c.u2_api_token||'')}'></div><div class='full'><div class='k'>U2 Passkey</div><input id='b_u2_passkey' type='password' value='${esc(c.u2_passkey||'')}'></div><div><div class='k'>魔法范围</div><select id='b_scope'><option value='public' ${(c.scope||'public')==='public'?'selected':''}>public</option><option value='all' ${(c.scope||'public')==='all'?'selected':''}>all</option><option value='private' ${(c.scope||'public')==='private'?'selected':''}>private</option><option value='global' ${(c.scope||'public')==='global'?'selected':''}>global</option></select></div><div><div class='k'>仅抓 2XFree</div><input id='b_require_2x_free' type='checkbox' ${c.require_2x_free!==false?'checked':''}></div></div><div class='row' style='margin-top:12px'><button class='btn' onclick="putCfg({enabled:el('b_enabled').checked,interval:parseInt(el('b_interval').value||'120'),limit:parseInt(el('b_limit').value||'20'),max_seeders:parseInt(el('b_max_seeders').value||'5'),qb_mode:el('b_qb_mode').value,qb_up_limit_mb:parseInt(el('b_qb_up_limit_mb').value||'50'),u2_api_base:el('b_u2_api_base').value.trim(),u2_api_token:el('b_u2_api_token').value.trim(),u2_passkey:el('b_u2_passkey').value.trim(),scope:el('b_scope').value,require_2x_free:el('b_require_2x_free').checked}, event.target)">保存基础配置</button></div>`);
+  else if(tab==='tg') renderWorkspace(`<div class='grid grid-2'><div><div class='k'>启用</div><input id='t_enabled' type='checkbox' ${c.tg_enabled?'checked':''}></div><div><div class='k'>chat id</div><input id='t_chat' value='${esc(c.tg_chat_id||'')}'></div><div class='full'><div class='k'>bot token</div><input id='t_token' value='${esc(c.tg_bot_token||'')}'></div></div><div class='row' style='margin-top:12px'><button class='btn' onclick="putCfg({tg_enabled:el('t_enabled').checked, tg_chat_id:el('t_chat').value.trim(), tg_bot_token:el('t_token').value.trim()}, event.target)">保存TG配置</button></div>`);
+  else if(tab==='magic') renderWorkspace(`<div class='grid grid-3'><div><div class='k'>启用自动魔法</div><input id='m_enabled' type='checkbox' ${c.auto_self_magic_enabled?'checked':''}></div><div><div class='k'>检查间隔(秒)</div><input id='m_interval' type='number' min='10' value='${c.auto_self_magic_interval||60}'></div><div><div class='k'>最小上传(KiB/s)</div><input id='m_minup' type='number' min='1' value='${c.auto_self_magic_min_upload_kib||1024}'></div><div><div class='k'>最小体积(GB)</div><input id='m_minsize' type='number' min='1' value='${c.auto_self_magic_min_size_gb||5}'></div><div><div class='k'>最大体积(GB,0=不限)</div><input id='m_maxsize' type='number' min='0' value='${c.auto_self_magic_max_size_gb||0}'></div><div><div class='k'>最小生存天数</div><input id='m_mind' type='number' min='0' value='${c.auto_self_magic_min_d??30}'></div><div><div class='k'>魔法时长(小时)</div><input id='m_hours' type='number' min='1' max='360' value='${c.auto_self_magic_hours??24}'></div><div><div class='k'>包含下载中</div><input id='m_allow_down' type='checkbox' ${c.auto_self_magic_magic_downloading!==false?'checked':''}></div><div><div class='k'>U2 UID</div><input id='m_uid' type='number' min='0' value='${c.u2_uid??0}'></div><div class='full'><div class='k'>U2 Cookie(nexusphp_u2)</div><input id='m_cookie' type='password' value='${esc(c.u2_cookie||'')}'></div></div><div class='row' style='margin-top:12px'><button class='btn' onclick="putCfg({auto_self_magic_enabled:el('m_enabled').checked,auto_self_magic_interval:parseInt(el('m_interval').value||'60'),auto_self_magic_min_upload_kib:parseInt(el('m_minup').value||'1024'),auto_self_magic_min_size_gb:parseInt(el('m_minsize').value||'5'),auto_self_magic_max_size_gb:parseInt(el('m_maxsize').value||'0'),auto_self_magic_min_d:parseInt(el('m_mind').value||'30'),auto_self_magic_hours:parseInt(el('m_hours').value||'24'),auto_self_magic_magic_downloading:el('m_allow_down').checked,u2_uid:parseInt(el('m_uid').value||'0'),u2_cookie:el('m_cookie').value.trim()}, event.target)">保存魔法配置</button><button class='btn' onclick='runMagicOnce(event)'>手动魔法</button><button class='btn' onclick='queryMagicHistory(event)'>查询放魔记录</button></div>`);
+  else if(tab==='qbconfig'){ renderWorkspace(`<div id='qb-editor'></div><div class='row' style='margin-top:12px'><button class='btn' onclick='addQB()'>+ 新增</button><button class='btn' onclick='saveQBAll(event)'>保存qB配置</button></div>`); renderQBEditor(); }
+  else if(tab==='security') renderWorkspace(`<div class='grid grid-2'><div><div class='k'>当前状态</div><div class='v'>${c.web_auth_enabled?'已启用（需登录）':'未启用（可直接访问）'}</div></div><div><div class='k'>说明</div><div class='v'>设置密码后将强制登录；删除密码后恢复免密访问</div></div><div class='full'><div class='k'>新密码</div><input id='a_password' type='password' placeholder='至少6位'></div></div><div class='row' style='margin-top:12px'><button class='btn' onclick='saveAuth(event)'>设置/更新密码</button><button class='btn' onclick='deleteAuthPassword(event)'>删除密码（恢复免密）</button><button class='btn' onclick='logoutNow(event)'>退出登录</button></div>`);
+  else if(tab==='theme') renderWorkspace(`<div class='row'><button class='btn' onclick="localStorage.setItem('cm_theme', getTheme()==='light'?'dark':'light'); applyTheme(); toast('主题已切换', true)">切换主题</button></div>`);
 }
 function saveQBAll(ev){ const arr=collectQB(); for(const q of arr){ if(!validUrl((q.qb_url||'').trim())){ toast('qB URL 格式错误', false); return; } } putCfg({qb_clients:arr}, ev?.target); }
-async function refreshLogs(force=false){
-  try{
-    const cursor = force ? 0 : logCursor;
-    const d = await fetch(`/api/logs?cursor=${cursor}&limit=200`).then(r=>r.json());
-    const node = el('logs'); if(!node) return;
-    if(force || d.reset){ node.textContent = d.text || '(暂无日志)'; }
-    else if(d.text){ node.textContent = d.text + '\n' + (node.textContent||''); }
-    logCursor = Number(d.cursor||logCursor||0);
-  }catch(e){ const node=el('logs'); if(node && force) node.textContent='日志刷新失败，请稍后重试'; }
-}
+async function refreshLogs(force=false){ try{ const cursor = force ? 0 : logCursor; const d = await fetch(`/api/logs?cursor=${cursor}&limit=200`).then(r=>r.json()); const node = el('logs'); if(!node) return; if(force || d.reset){ node.textContent = d.text || '(暂无日志)'; } else if(d.text){ node.textContent = d.text + '\n' + (node.textContent||''); } logCursor = Number(d.cursor||logCursor||0); }catch(e){ const node=el('logs'); if(node && force) node.textContent='日志刷新失败，请稍后重试'; } }
 function startLogLoop(){ if(logTimer) clearInterval(logTimer); refreshLogs(true); logTimer=setInterval(()=>refreshLogs(false), 8000); }
 applyTheme();
 const refreshBtn = el('refresh-logs-btn'); if(refreshBtn) refreshBtn.onclick=()=>refreshLogs(true);
 startLogLoop();
+switchTab('overview');
 </script>
 </body>
 </html>
