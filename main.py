@@ -31,7 +31,7 @@ STATE_PATH = DATA_DIR / 'state.json'
 UPGRADE_REQUEST_PATH = DATA_DIR / 'upgrade.request.json'
 UPGRADE_STATUS_PATH = DATA_DIR / 'upgrade.status.json'
 APP_LOG = LOG_DIR / 'app.log'
-APP_VERSION = '2026.3.103'
+APP_VERSION = '2026.3.104'
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / 'templates'
 STATIC_DIR = BASE_DIR / 'static'
@@ -1672,7 +1672,7 @@ def legacy_index():
 </head>
 <body>
   <div class='wrap'>
-    <div class='title'><h2>Catch Magic Web <span style='font-size:13px;color:var(--sub);font-weight:500'>v__APP_VERSION__</span></h2><div class='actions'><button class='ghost' type='button' onclick='openMainConfigModal()'>基础配置</button><button class='ghost' type='button' onclick='openTGModal()'>TG配置</button><button class='ghost compact' type='button' onclick='openMagicCfgModal();return false;'>魔法配置</button><button class='ghost compact' type='button' onclick='runSelfMagicOnce()'>手动魔法</button><button class='ghost compact' type='button' onclick='retryFailedPushes()'>失败重推</button><button class='ghost' type='button' onclick='toggleTheme()'>🌗 主题切换</button><div class='badge' id='runBadge'>状态读取中...</div></div></div>
+    <div class='title'><h2>Catch Magic Web <span style='font-size:13px;color:var(--sub);font-weight:500'>v__APP_VERSION__</span></h2><div class='actions'><button class='ghost' type='button' onclick="openConfigPage('base')">基础配置</button><button class='ghost' type='button' onclick="openConfigPage('tg')">TG配置</button><button class='ghost compact' type='button' onclick="openConfigPage('magic');return false;">魔法配置</button><button class='ghost compact' type='button' onclick='runSelfMagicOnce()'>手动魔法</button><button class='ghost compact' type='button' onclick='retryFailedPushes()'>失败重推</button><button class='ghost' type='button' onclick='toggleTheme()'>🌗 主题切换</button><div class='badge' id='runBadge'>状态读取中...</div></div></div>
     <div id='app' class='grid'>loading...</div>
   </div>
 <script>
@@ -1693,119 +1693,14 @@ function toggleTheme(){ localStorage.setItem('cm_theme', getTheme()==='light'?'d
 
 
 
-function openMagicCfgModal(){
-  ['qbModal','mainCfgModal','tgModal'].forEach(id=>{const x=document.getElementById(id); if(x) x.style.display='none';});
-  const m=document.getElementById('magicCfgModal');
-  if(!m){ alert('魔法配置弹窗加载失败，请刷新页面后重试'); return; }
-  m.style.display='flex';
-  m.style.zIndex='1200';
-  m.style.pointerEvents='auto';
+function openConfigPage(kind){
+  const target = `/config/${kind}`;
+  const win = window.open(target, '_blank', 'noopener,noreferrer');
+  if(!win) alert('新窗口被浏览器拦截，请允许当前站点弹出窗口后重试');
 }
-function closeMagicCfgModal(){
-  const m=document.getElementById('magicCfgModal');
-  if(m) m.style.display='none';
-}
-async function saveMagicConfigOnly(){
-  const c=await j('/api/config');
-  const body={...c,
-    auto_self_magic_enabled:document.getElementById('auto_self_magic_enabled')?.checked||false,
-    auto_self_magic_min_upload_kib:parseInt(document.getElementById('auto_self_magic_min_upload_kib')?.value||'1024'),
-    auto_self_magic_min_size_gb:parseInt(document.getElementById('auto_self_magic_min_size_gb')?.value||'5'),
-    auto_self_magic_max_size_gb:parseInt(document.getElementById('auto_self_magic_max_size_gb')?.value||'0'),
-    auto_self_magic_hours:parseInt(document.getElementById('auto_self_magic_hours')?.value||'24'),
-    auto_self_magic_interval:parseInt(document.getElementById('auto_self_magic_interval')?.value||'60'),
-    auto_self_magic_magic_downloading:document.getElementById('auto_self_magic_magic_downloading')?.checked!==false,
-    auto_self_magic_min_d:parseInt(document.getElementById('auto_self_magic_min_d')?.value||'180'),
-    u2_uid:parseInt(document.getElementById('u2_uid')?.value||'0'),
-    u2_cookie:(document.getElementById('u2_cookie')?.value||'').trim(),
-    qb_clients: qbClients,
-    ...collectTG(),
-  };
-  await fetch('/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  alert('自放魔法配置已保存');
-  closeMagicCfgModal();
-  setTimeout(load,300);
-}
-
-function openMainConfigModal(){ const m=document.getElementById('mainCfgModal'); if(m) m.style.display='flex'; }
-function closeMainConfigModal(){ const m=document.getElementById('mainCfgModal'); if(m) m.style.display='none'; }
-
-function openTGModal(){
-  ['qbModal','mainCfgModal','magicCfgModal'].forEach(id=>{const x=document.getElementById(id); if(x) x.style.display='none';});
-  const m=document.getElementById('tgModal');
-  if(m) m.style.display='flex';
-  else alert('TG配置弹窗加载失败，请刷新页面后重试');
-}
-function closeTGModal(){
-  const m=document.getElementById('tgModal');
-  if(m) m.style.display='none';
-}
-function setTGForm(c){
-  const e=document.getElementById('tg_enabled'); if(!e) return;
-  e.checked=!!c.tg_enabled;
-  document.getElementById('tg_bot_token').value=c.tg_bot_token||'';
-  document.getElementById('tg_chat_id').value=c.tg_chat_id||'';
-  document.getElementById('tg_notify_new').checked=(c.tg_notify_new!==false);
-  document.getElementById('tg_notify_error').checked=(c.tg_notify_error!==false);
-}
-function collectTG(){
-  return {
-    tg_enabled: document.getElementById('tg_enabled')?.checked||false,
-    tg_bot_token: (document.getElementById('tg_bot_token')?.value||'').trim(),
-    tg_chat_id: (document.getElementById('tg_chat_id')?.value||'').trim(),
-    tg_notify_new: document.getElementById('tg_notify_new')?.checked!==false,
-    tg_notify_error: document.getElementById('tg_notify_error')?.checked!==false,
-  }
-}
-async function saveTGConfigOnly(){
-  const c=await j('/api/config');
-  const t=collectTG();
-  const body={...c,...t, qb_clients: qbClients};
-  await fetch('/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  alert('TG配置已保存');
-  closeTGModal();
-}
-
 function openQb(i){
   const q=qbClients[i]||{};
   if(q.qb_url) window.open(q.qb_url,'_blank');
-}
-
-function openQbConfig(i){
-  editingQbIndex=i;
-  const q=qbClients[i]||{};
-  const modal=document.getElementById('qbModal');
-  if(!modal) return;
-  document.getElementById('m_qb_name').value=q.name||'';
-  document.getElementById('m_qb_enabled').checked=q.enabled!==false;
-  document.getElementById('m_qb_url').value=q.qb_url||'';
-  document.getElementById('m_qb_username').value=q.qb_username||'';
-  document.getElementById('m_qb_password').value=q.qb_password||'';
-  document.getElementById('m_qb_category').value=q.qb_category||'';
-  document.getElementById('m_qb_savepath').value=q.qb_savepath||'';
-  document.getElementById('m_qb_paused').checked=!!q.qb_paused;
-  modal.style.display='flex';
-}
-
-function closeQbConfig(){
-  editingQbIndex=null;
-  const modal=document.getElementById('qbModal');
-  if(modal) modal.style.display='none';
-}
-
-function saveQbConfig(){
-  if(editingQbIndex===null || editingQbIndex<0 || editingQbIndex>=qbClients.length) return;
-  const q=qbClients[editingQbIndex];
-  q.name=document.getElementById('m_qb_name').value.trim();
-  q.enabled=document.getElementById('m_qb_enabled').checked;
-  q.qb_url=document.getElementById('m_qb_url').value.trim();
-  q.qb_username=document.getElementById('m_qb_username').value.trim();
-  q.qb_password=document.getElementById('m_qb_password').value.trim();
-  q.qb_category=document.getElementById('m_qb_category').value.trim();
-  q.qb_savepath=document.getElementById('m_qb_savepath').value.trim();
-  q.qb_paused=document.getElementById('m_qb_paused').checked;
-  closeQbConfig();
-  refreshQbStats();
 }
 
 function renderQbModules(items=[]){
@@ -1832,7 +1727,7 @@ function renderQbModules(items=[]){
         </div>
         <div class='actions' style='margin-top:6px'>
           <button class='ghost' onclick='openQb(${i})'>打开 qB</button>
-          <button onclick='openQbConfig(${i})'>配置</button>
+          <button onclick="openConfigPage('qb')">配置</button>
           <button class='danger' onclick='removeQb(${i})'>删除</button>
         </div>
         ${ok?'':`<div class='tip' style='margin-top:8px;color:#ff9aa2'>${esc(it.error||'连接失败')}</div>`}
@@ -1879,102 +1774,7 @@ async function load(){
    <div id='qbModules' class='modules'><div class='tip'>加载中...</div></div>
  </div>
 
- <div id='mainCfgModal' style='display:none;position:fixed;inset:0;background:#0008;z-index:1000;align-items:center;justify-content:center;padding:14px'>
-   <div style='width:min(920px,100%);max-height:90vh;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px'>
-     <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px'>
-       <div style='font-weight:700;color:var(--text)'>基础配置</div>
-       <button class='ghost' onclick='closeMainConfigModal()'>关闭</button>
-     </div>
- <div class='card'><div class='form'>
-   <input style='display:none' type='text' name='fake_username' autocomplete='username'>
-   <input style='display:none' type='password' name='fake_password' autocomplete='current-password'>
-   <div class='full switch'><input id='enabled' type='checkbox' ${c.enabled?'checked':''}><label for='enabled' style='margin:0;color:var(--text)'>启用定时任务</label></div>
-   <div><label>执行间隔（秒）</label><input id='interval' type='number' min='10' value='${c.interval}'></div>
-   <div><label>抓取条数（limit）</label><input id='limit' type='number' min='1' max='60' value='${c.limit}'></div>
-   <div><label>最大做种人数</label><input id='max_seeders' type='number' min='0' value='${c.max_seeders??5}'></div>
-   <div class='full'><label>U2 API Base</label><input id='u2_api_base' value='${esc(c.u2_api_base)}'></div>
-   <div class='full'><label>U2 API Token</label><input id='u2_api_token' name='u2_api_token_input' type='password' autocomplete='new-password' autocapitalize='off' autocorrect='off' spellcheck='false' value='${esc(c.u2_api_token||'')}'></div>
-   <div class='full'><label>U2 Passkey</label><input id='u2_passkey' name='u2_passkey_input' type='password' autocomplete='new-password' autocapitalize='off' autocorrect='off' spellcheck='false' value='${esc(c.u2_passkey||'')}'></div>
-   <div><label>魔法范围（scope）</label><select id='scope'><option value='public' ${c.scope==='public'?'selected':''}>公共魔法（public）</option><option value='all' ${c.scope==='all'?'selected':''}>全部魔法（all）</option><option value='private' ${c.scope==='private'?'selected':''}>私人魔法（private）</option><option value='global' ${c.scope==='global'?'selected':''}>全局魔法（global）</option></select></div>
-   <div><label>qB 分发模式</label><select id='qb_mode'><option value='round_robin' ${c.qb_mode==='round_robin'?'selected':''}>轮询分发</option><option value='all' ${c.qb_mode==='all'?'selected':''}>全部推送</option></select></div>
-   <div><label>单种上传限速(MB/s)</label><input id='qb_up_limit_mb' type='number' min='0' value='${c.qb_up_limit_mb??50}'></div>
-   <div class='switch'><input id='require_2x_free' type='checkbox' ${c.require_2x_free!==false?'checked':''}><label for='require_2x_free' style='margin:0;color:var(--text)'>仅抓取 2XFree</label></div>
- </div>
- <div class='actions' style='margin-top:12px'><button onclick='save()'>保存配置</button><button onclick='runNow()'>立即执行一次</button><button class='ghost' onclick='refreshLogs(true)'>刷新日志</button></div>
- <div class='tip' style='margin-top:10px'>点击模块上的“配置”按钮才会弹出配置窗口。</div>
- </div>
-
-   </div>
- </div>
  <div class='card'><div class='k' style='margin-bottom:8px'>最近日志（最多 200 行）</div><pre id='logs'>loading logs...</pre></div>
-
- <div id='qbModal' style='display:none;position:fixed;inset:0;background:#0008;z-index:999;align-items:center;justify-content:center;padding:14px'>
-   <div style='width:min(560px,100%);max-height:90vh;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px'>
-     <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px'>
-       <div style='font-weight:700;color:var(--text)'>qB 配置</div>
-       <button class='ghost' onclick='closeQbConfig()'>关闭</button>
-     </div>
-     <div class='editor-grid'>
-       <div><label>名称</label><input id='m_qb_name'></div>
-       <div class='switch'><input id='m_qb_enabled' type='checkbox'><label for='m_qb_enabled' style='margin:0;color:var(--text)'>启用</label></div>
-       <div><label>URL</label><input id='m_qb_url' placeholder='http://127.0.0.1:8080'></div>
-       <div><label>用户名</label><input id='m_qb_username'></div>
-       <div><label>密码</label><input id='m_qb_password' type='password'></div>
-       <div><label>分类</label><input id='m_qb_category'></div>
-       <div class='full'><label>保存路径</label><input id='m_qb_savepath' placeholder='/downloads/u2'></div>
-       <div class='switch full'><input id='m_qb_paused' type='checkbox'><label for='m_qb_paused' style='margin:0;color:var(--text)'>推送后暂停</label></div>
-     </div>
-     <div class='actions' style='margin-top:10px'>
-       <button onclick='saveQbConfig()'>保存当前模块配置</button>
-     </div>
-   </div>
- </div>
-
- <div id='tgModal' style='display:none;position:fixed;inset:0;background:#0008;z-index:1000;align-items:center;justify-content:center;padding:14px'>
-   <div style='width:min(560px,100%);max-height:90vh;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px'>
-     <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px'>
-       <div style='font-weight:700;color:var(--text)'>Telegram 配置</div>
-       <button class='ghost' onclick='closeTGModal()'>关闭</button>
-     </div>
-     <div class='editor-grid'>
-       <div class='switch full'><input id='tg_enabled' type='checkbox'><label for='tg_enabled' style='margin:0;color:var(--text)'>启用TG通知</label></div>
-       <div class='full'><label style='color:var(--text)'>Bot Token</label><input id='tg_bot_token' name='tg_bot_token_input' type='password' autocomplete='new-password' autocapitalize='off' autocorrect='off' spellcheck='false' placeholder='123456:ABC...'></div>
-       <div class='full'><label style='color:var(--text)'>Chat ID</label><input id='tg_chat_id' placeholder='例如 1036463619'></div>
-       <div class='switch'><input id='tg_notify_new' type='checkbox'><label for='tg_notify_new' style='margin:0;color:var(--text)'>新推广通知</label></div>
-       <div class='switch'><input id='tg_notify_error' type='checkbox'><label for='tg_notify_error' style='margin:0;color:var(--text)'>失败告警通知</label></div>
-     </div>
-     <div class='actions' style='margin-top:10px'>
-       <button onclick='saveTGConfigOnly()'>保存TG配置</button>
-       <button onclick='testTG()'>测试通知</button>
-     </div>
-   </div>
- </div>
-
- <div id='magicCfgModal' style='display:none;position:fixed;inset:0;background:#0008;z-index:1000;align-items:center;justify-content:center;padding:14px'>
-   <div style='width:min(700px,100%);max-height:90vh;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px'>
-     <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:8px'>
-       <div style='font-weight:700;color:var(--text)'>自放魔法配置</div>
-       <button class='ghost' onclick='closeMagicCfgModal()'>关闭</button>
-     </div>
-     <div class='editor-grid'>
-       <div class='switch full'><input id='auto_self_magic_enabled' type='checkbox' ${c.auto_self_magic_enabled?'checked':''}><label for='auto_self_magic_enabled' style='margin:0;color:var(--text)'>启用自动给自己放2.33x魔法</label></div>
-       <div><label>检查间隔(秒)</label><input id='auto_self_magic_interval' type='number' min='10' value='${c.auto_self_magic_interval??60}'></div>
-       <div class='switch'><input id='auto_self_magic_magic_downloading' type='checkbox' ${c.auto_self_magic_magic_downloading!==false?'checked':''}><label for='auto_self_magic_magic_downloading' style='margin:0;color:var(--text)'>包含下载中的种子</label></div>
-       <div><label>最小上传速度(KiB/s)</label><input id='auto_self_magic_min_upload_kib' type='number' min='1' value='${c.auto_self_magic_min_upload_kib??1024}'></div>
-       <div><label>最小体积(GB)</label><input id='auto_self_magic_min_size_gb' type='number' min='1' value='${c.auto_self_magic_min_size_gb??5}'></div>
-       <div><label>最大体积(GB，0=不限制)</label><input id='auto_self_magic_max_size_gb' type='number' min='0' value='${c.auto_self_magic_max_size_gb??0}'></div>
-       <div><label>种子最小生存天数</label><input id='auto_self_magic_min_d' type='number' min='0' value='${c.auto_self_magic_min_d??180}'></div>
-       <div><label>魔法时长(小时)</label><input id='auto_self_magic_hours' type='number' min='1' max='360' value='${c.auto_self_magic_hours??24}'></div>
-       <div><label>U2 UID</label><input id='u2_uid' type='number' min='0' value='${c.u2_uid??0}'></div>
-       <div class='full'><label>U2 Cookie(nexusphp_u2)</label><input id='u2_cookie' type='password' autocomplete='new-password' value='${esc(c.u2_cookie||'')}'></div>
-     </div>
-     <div class='actions' style='margin-top:10px'>
-       <button onclick='saveMagicConfigOnly()'>保存自放魔法配置</button>
-       <button onclick='runSelfMagicOnce()'>立即手动执行一次</button>
-     </div>
-   </div>
- </div>
-
 </div>`;
  setTGForm(c);
  await refreshQbStats();
@@ -2035,9 +1835,183 @@ load();
 """.replace('__APP_VERSION__', APP_VERSION)
 
 
+CONFIG_PAGE_HTML = """
+<!doctype html>
+<html lang='zh-CN'>
+<head>
+  <meta charset='utf-8' />
+  <meta name='viewport' content='width=device-width,initial-scale=1' />
+  <title>Catch Magic 配置</title>
+  <style>
+    :root{color-scheme:dark;background:#0b1220;color:#e5e7eb;--bg:#0b1220;--card:#111827;--line:#243041;--text:#e5e7eb;--sub:#94a3b8;--btn:#2563eb;--btn2:#1d4ed8;--ghost:#172033;--danger:#dc2626;--ok:#16a34a;--warn:#f59e0b}
+    body.theme-light{color-scheme:light;--bg:#f6f8fb;--card:#ffffff;--line:#dbe3ef;--text:#0f172a;--sub:#475569;--btn:#2563eb;--btn2:#1d4ed8;--ghost:#eef3ff;--danger:#dc2626;--ok:#16a34a;--warn:#d97706}
+    *{box-sizing:border-box} html,body{margin:0;background:var(--bg);color:var(--text);font:14px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,'PingFang SC','Noto Sans CJK SC','Microsoft YaHei',sans-serif}
+    .wrap{max-width:980px;margin:0 auto;padding:18px}
+    .head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+    .title h2{margin:0;font-size:22px}
+    .sub{color:var(--sub);font-size:13px}
+    .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;box-shadow:0 10px 28px rgba(0,0,0,.18)}
+    .form,.editor-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+    .full{grid-column:1 / -1}
+    label{display:block;margin-bottom:6px;color:var(--sub);font-size:13px}
+    input,select,button,textarea{width:100%;padding:11px 12px;border-radius:10px;border:1px solid var(--line);background:transparent;color:var(--text);outline:none}
+    textarea{min-height:140px;resize:vertical}
+    button{background:var(--btn);border:none;color:#fff;font-weight:600;cursor:pointer}
+    button:hover{background:var(--btn2)}
+    button.ghost{background:var(--ghost);color:var(--text);border:1px solid var(--line)}
+    button.danger{background:var(--danger)}
+    .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+    .actions button{width:auto;min-width:140px}
+    .tip{color:var(--sub);font-size:13px;margin-top:12px}
+    .switch{display:flex;align-items:center;gap:8px;padding-top:28px}
+    .switch input{width:18px;height:18px;margin:0}
+    .switch label{margin:0;color:var(--text)}
+    .qb-item{border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px;background:rgba(255,255,255,.02)}
+    .qb-title{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px}
+    .qb-title strong{font-size:15px}
+    @media (max-width:720px){.form,.editor-grid{grid-template-columns:1fr}.actions button{width:100%}}
+  </style>
+</head>
+<body>
+  <div class='wrap'>
+    <div class='head'>
+      <div class='title'>
+        <h2 id='pageTitle'>配置页</h2>
+        <div class='sub' id='pageSub'>Catch Magic Web v__APP_VERSION__</div>
+      </div>
+      <div style='display:flex;gap:8px;flex-wrap:wrap'>
+        <button class='ghost' type='button' onclick='window.close()'>关闭窗口</button>
+        <button class='ghost' type='button' onclick='toggleTheme()'>🌗 主题切换</button>
+      </div>
+    </div>
+    <div id='app' class='card'>加载中...</div>
+  </div>
+<script>
+const PAGE_KIND='__PAGE_KIND__';
+let qbClients=[];
+function getTheme(){ return localStorage.getItem('cm_theme')||'dark'; }
+function applyTheme(){ const t=getTheme(); document.body.classList.toggle('theme-light', t==='light'); }
+function toggleTheme(){ localStorage.setItem('cm_theme', getTheme()==='light'?'dark':'light'); applyTheme(); }
+async function j(u,o){ const r=await fetch(u,o); return await r.json(); }
+function esc(t){return (t??'').toString().replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+function collectTG(){
+  return {
+    tg_enabled: document.getElementById('tg_enabled')?.checked||false,
+    tg_bot_token: (document.getElementById('tg_bot_token')?.value||'').trim(),
+    tg_chat_id: (document.getElementById('tg_chat_id')?.value||'').trim(),
+    tg_notify_new: document.getElementById('tg_notify_new')?.checked!==false,
+    tg_notify_error: document.getElementById('tg_notify_error')?.checked!==false,
+  }
+}
+function renderBase(c){
+  document.getElementById('pageTitle').textContent='基础配置';
+  return `
+  <div class='form'>
+    <input style='display:none' type='text' name='fake_username' autocomplete='username'>
+    <input style='display:none' type='password' name='fake_password' autocomplete='current-password'>
+    <div class='full switch'><input id='enabled' type='checkbox' ${c.enabled?'checked':''}><label for='enabled'>启用定时任务</label></div>
+    <div><label>执行间隔（秒）</label><input id='interval' type='number' min='10' value='${c.interval}'></div>
+    <div><label>抓取条数（limit）</label><input id='limit' type='number' min='1' max='60' value='${c.limit}'></div>
+    <div><label>最大做种人数</label><input id='max_seeders' type='number' min='0' value='${c.max_seeders??5}'></div>
+    <div><label>qB 分发模式</label><select id='qb_mode'><option value='round_robin' ${c.qb_mode==='round_robin'?'selected':''}>轮询分发</option><option value='all' ${c.qb_mode==='all'?'selected':''}>全部推送</option></select></div>
+    <div><label>单种上传限速(MB/s)</label><input id='qb_up_limit_mb' type='number' min='0' value='${c.qb_up_limit_mb??50}'></div>
+    <div class='full'><label>U2 API Base</label><input id='u2_api_base' value='${esc(c.u2_api_base)}'></div>
+    <div class='full'><label>U2 API Token</label><input id='u2_api_token' type='password' autocomplete='new-password' value='${esc(c.u2_api_token||'')}'></div>
+    <div class='full'><label>U2 Passkey</label><input id='u2_passkey' type='password' autocomplete='new-password' value='${esc(c.u2_passkey||'')}'></div>
+    <div><label>魔法范围（scope）</label><select id='scope'><option value='public' ${c.scope==='public'?'selected':''}>公共魔法（public）</option><option value='all' ${c.scope==='all'?'selected':''}>全部魔法（all）</option><option value='private' ${c.scope==='private'?'selected':''}>私人魔法（private）</option><option value='global' ${c.scope==='global'?'selected':''}>全局魔法（global）</option></select></div>
+    <div class='switch'><input id='require_2x_free' type='checkbox' ${c.require_2x_free!==false?'checked':''}><label for='require_2x_free'>仅抓取 2XFree</label></div>
+  </div>
+  <div class='actions'><button onclick='saveBase()'>保存基础配置</button><button class='ghost' onclick='runNow()'>立即执行一次</button></div>
+  <div class='tip'>该页面只处理基础配置，不再占用主看板页面。</div>`;
+}
+function renderTG(c){
+  document.getElementById('pageTitle').textContent='TG 配置';
+  return `
+  <div class='editor-grid'>
+    <div class='switch full'><input id='tg_enabled' type='checkbox' ${c.tg_enabled?'checked':''}><label for='tg_enabled'>启用TG通知</label></div>
+    <div class='full'><label>Bot Token</label><input id='tg_bot_token' type='password' autocomplete='new-password' value='${esc(c.tg_bot_token||'')}' placeholder='123456:ABC...'></div>
+    <div class='full'><label>Chat ID</label><input id='tg_chat_id' value='${esc(c.tg_chat_id||'')}' placeholder='例如 1036463619'></div>
+    <div class='switch'><input id='tg_notify_new' type='checkbox' ${c.tg_notify_new!==false?'checked':''}><label for='tg_notify_new'>新推广通知</label></div>
+    <div class='switch'><input id='tg_notify_error' type='checkbox' ${c.tg_notify_error!==false?'checked':''}><label for='tg_notify_error'>失败告警通知</label></div>
+  </div>
+  <div class='actions'><button onclick='saveTG()'>保存TG配置</button><button class='ghost' onclick='testTG()'>测试通知</button></div>`;
+}
+function renderMagic(c){
+  document.getElementById('pageTitle').textContent='魔法配置';
+  return `
+  <div class='editor-grid'>
+    <div class='switch full'><input id='auto_self_magic_enabled' type='checkbox' ${c.auto_self_magic_enabled?'checked':''}><label for='auto_self_magic_enabled'>启用自动给自己放2.33x魔法</label></div>
+    <div><label>检查间隔(秒)</label><input id='auto_self_magic_interval' type='number' min='10' value='${c.auto_self_magic_interval??60}'></div>
+    <div class='switch'><input id='auto_self_magic_magic_downloading' type='checkbox' ${c.auto_self_magic_magic_downloading!==false?'checked':''}><label for='auto_self_magic_magic_downloading'>包含下载中的种子</label></div>
+    <div><label>最小上传速度(KiB/s)</label><input id='auto_self_magic_min_upload_kib' type='number' min='1' value='${c.auto_self_magic_min_upload_kib??1024}'></div>
+    <div><label>最小体积(GB)</label><input id='auto_self_magic_min_size_gb' type='number' min='1' value='${c.auto_self_magic_min_size_gb??5}'></div>
+    <div><label>最大体积(GB，0=不限制)</label><input id='auto_self_magic_max_size_gb' type='number' min='0' value='${c.auto_self_magic_max_size_gb??0}'></div>
+    <div><label>种子最小生存天数</label><input id='auto_self_magic_min_d' type='number' min='0' value='${c.auto_self_magic_min_d??180}'></div>
+    <div><label>魔法时长(小时)</label><input id='auto_self_magic_hours' type='number' min='1' max='360' value='${c.auto_self_magic_hours??24}'></div>
+    <div><label>U2 UID</label><input id='u2_uid' type='number' min='0' value='${c.u2_uid??0}'></div>
+    <div class='full'><label>U2 Cookie(nexusphp_u2)</label><input id='u2_cookie' type='password' autocomplete='new-password' value='${esc(c.u2_cookie||'')}'></div>
+  </div>
+  <div class='actions'><button onclick='saveMagic()'>保存自放魔法配置</button><button class='ghost' onclick='runSelfMagicOnce()'>立即手动执行一次</button></div>`;
+}
+function renderQB(c){
+  document.getElementById('pageTitle').textContent='qB 配置';
+  const items=(c.qb_clients||[]).map((q,i)=>`
+    <div class='qb-item'>
+      <div class='qb-title'><strong>${esc(q.name||('qb-'+(i+1)))}</strong><button class='danger' type='button' onclick='removeQb(${i})'>删除</button></div>
+      <div class='editor-grid'>
+        <div><label>名称</label><input data-key='name' data-idx='${i}' value='${esc(q.name||'')}'></div>
+        <div class='switch'><input id='qb_enabled_${i}' data-key='enabled' data-idx='${i}' type='checkbox' ${q.enabled!==false?'checked':''}><label for='qb_enabled_${i}'>启用</label></div>
+        <div><label>URL</label><input data-key='qb_url' data-idx='${i}' value='${esc(q.qb_url||'')}' placeholder='http://127.0.0.1:8080'></div>
+        <div><label>用户名</label><input data-key='qb_username' data-idx='${i}' value='${esc(q.qb_username||'')}'></div>
+        <div><label>密码</label><input data-key='qb_password' data-idx='${i}' type='password' value='${esc(q.qb_password||'')}'></div>
+        <div><label>分类</label><input data-key='qb_category' data-idx='${i}' value='${esc(q.qb_category||'')}'></div>
+        <div class='full'><label>保存路径</label><input data-key='qb_savepath' data-idx='${i}' value='${esc(q.qb_savepath||'')}' placeholder='/downloads/u2'></div>
+        <div class='switch full'><input id='qb_paused_${i}' data-key='qb_paused' data-idx='${i}' type='checkbox' ${q.qb_paused?'checked':''}><label for='qb_paused_${i}'>推送后暂停</label></div>
+      </div>
+    </div>`).join('');
+  return `${items || "<div class='tip'>暂无 qB 配置，先新增一个。</div>"}
+  <div class='actions'><button onclick='addQb()'>+ 添加QB配置</button><button onclick='saveQB()'>保存qB配置</button></div>`;
+}
+function syncQBFromForm(){
+  document.querySelectorAll('[data-idx]').forEach(el=>{
+    const idx=Number(el.dataset.idx||0); const key=el.dataset.key;
+    if(!qbClients[idx]) return;
+    qbClients[idx][key]=el.type==='checkbox'?el.checked:el.value.trim();
+  });
+}
+function addQb(){ qbClients.push({name:`qb-${qbClients.length+1}`,enabled:true,qb_url:'http://127.0.0.1:8080',qb_username:'',qb_password:'',qb_category:'',qb_savepath:'',qb_paused:false}); render(); }
+function removeQb(i){ qbClients.splice(i,1); render(); }
+async function saveBase(){ const c=await j('/api/config'); const body={...c,enabled:document.getElementById('enabled').checked,interval:parseInt(document.getElementById('interval').value||'120'),u2_api_base:document.getElementById('u2_api_base').value.trim(),u2_api_token:document.getElementById('u2_api_token').value.trim(),u2_passkey:document.getElementById('u2_passkey').value.trim(),scope:document.getElementById('scope').value,limit:parseInt(document.getElementById('limit').value||'20'),max_seeders:parseInt(document.getElementById('max_seeders').value||'5'),download_non_free:false,qb_mode:document.getElementById('qb_mode').value,qb_up_limit_mb:parseInt(document.getElementById('qb_up_limit_mb').value||'50'),require_2x_free:document.getElementById('require_2x_free').checked!==false,qb_clients:qbClients,...collectTG()}; await fetch('/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); alert('基础配置已保存'); }
+async function saveTG(){ const c=await j('/api/config'); const body={...c,...collectTG(),qb_clients:qbClients}; await fetch('/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); alert('TG配置已保存'); }
+async function saveMagic(){ const c=await j('/api/config'); const body={...c,auto_self_magic_enabled:document.getElementById('auto_self_magic_enabled').checked||false,auto_self_magic_min_upload_kib:parseInt(document.getElementById('auto_self_magic_min_upload_kib').value||'1024'),auto_self_magic_min_size_gb:parseInt(document.getElementById('auto_self_magic_min_size_gb').value||'5'),auto_self_magic_max_size_gb:parseInt(document.getElementById('auto_self_magic_max_size_gb').value||'0'),auto_self_magic_hours:parseInt(document.getElementById('auto_self_magic_hours').value||'24'),auto_self_magic_interval:parseInt(document.getElementById('auto_self_magic_interval').value||'60'),auto_self_magic_magic_downloading:document.getElementById('auto_self_magic_magic_downloading').checked!==false,auto_self_magic_min_d:parseInt(document.getElementById('auto_self_magic_min_d').value||'180'),u2_uid:parseInt(document.getElementById('u2_uid').value||'0'),u2_cookie:(document.getElementById('u2_cookie').value||'').trim(),qb_clients:qbClients,...collectTG()}; await fetch('/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); alert('自放魔法配置已保存'); }
+async function saveQB(){ const c=await j('/api/config'); syncQBFromForm(); const body={...c,qb_clients:qbClients,...collectTG()}; await fetch('/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); alert('qB配置已保存'); }
+async function runNow(){ await fetch('/api/run',{method:'POST'}); alert('已触发立即执行'); }
+async function testTG(){ const r=await fetch('/api/tg/test',{method:'POST'}); const d=await r.json(); alert(d.ok?('测试通知已发送：'+(d.message||'')):('测试通知失败：'+(d.error||'unknown'))); }
+async function runSelfMagicOnce(){ const r=await fetch('/api/self_magic/once',{method:'POST'}); const d=await r.json(); if(!d.ok){ alert('手动自放失败：'+(d.error||'未知错误')); return;} alert(`手动自放完成：${d.msg||('成功'+(d.done||0)+'条')}`); }
+async function render(){ applyTheme(); const c=await j('/api/config'); qbClients=JSON.parse(JSON.stringify(c.qb_clients||[])); const app=document.getElementById('app'); if(PAGE_KIND==='base') app.innerHTML=renderBase(c); else if(PAGE_KIND==='tg') app.innerHTML=renderTG(c); else if(PAGE_KIND==='magic') app.innerHTML=renderMagic(c); else if(PAGE_KIND==='qb') app.innerHTML=renderQB(c); else app.innerHTML="<div class='tip'>未知配置页面</div>"; }
+render();
+</script>
+</body>
+</html>
+"""
+
+
 @app.get('/api/version')
 def get_version():
     return {'version': APP_VERSION}
+
+
+@app.get('/config/{kind}', response_class=HTMLResponse)
+def config_page(kind: str):
+    mapping = {
+        'base': '基础配置',
+        'tg': 'TG配置',
+        'magic': '魔法配置',
+        'qb': 'qB配置',
+    }
+    if kind not in mapping:
+        return HTMLResponse('Not Found', status_code=404)
+    return HTMLResponse(CONFIG_PAGE_HTML.replace('__APP_VERSION__', APP_VERSION).replace('__PAGE_KIND__', kind))
 
 
 @app.get('/api/config')
