@@ -96,6 +96,7 @@ input:focus,select:focus{border-color:var(--line-strong);box-shadow:0 0 0 3px rg
 .toast.ok{background:#16a34a}.toast.err{background:#dc2626}.hide{display:none !important}
 .modal{position:fixed;inset:0;background:rgba(3,8,20,.64);z-index:4000;display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(10px)}
 .modal-card{width:min(1080px,96vw);max-height:90vh;overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:24px;padding:18px;box-shadow:var(--shadow)}
+.modal-card-wide{width:min(1240px,96vw)}
 .modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;position:sticky;top:0;background:var(--panel);padding-bottom:12px;margin-bottom:10px;z-index:2}
 .modal-head h3{margin:0;font-size:22px;letter-spacing:-.03em}
 .modal-body{padding-top:6px}
